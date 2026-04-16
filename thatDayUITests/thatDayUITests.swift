@@ -59,6 +59,21 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testJournalPreviousAndNextButtonsSwitchDates() throws {
+        let app = launchApp()
+
+        let headerButton = app.buttons["journalHeaderDateButton"]
+        XCTAssertTrue(headerButton.waitForExistence(timeout: 5))
+        XCTAssertEqual(headerButton.label, "April 16")
+
+        app.buttons["journalNextDayButton"].tap()
+        XCTAssertEqual(headerButton.label, "April 17")
+
+        app.buttons["journalPreviousDayButton"].tap()
+        XCTAssertEqual(headerButton.label, "April 16")
+    }
+
+    @MainActor
     func testCreateEditAndDeleteBlogPost() throws {
         let app = launchApp()
 
@@ -96,13 +111,9 @@ final class thatDayUITests: XCTestCase {
         let updatedTitle = app.staticTexts["UI Test Blog Story Edited"]
         XCTAssertTrue(updatedTitle.waitForExistence(timeout: 5))
 
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        editButton.tap()
 
-        let updatedListTitle = app.staticTexts["UI Test Blog Story Edited"]
-        XCTAssertTrue(updatedListTitle.waitForExistence(timeout: 5))
-        updatedListTitle.swipeLeft()
-
-        let deleteButton = app.buttons["删除"]
+        let deleteButton = app.buttons["entryDetailDeleteButton"]
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.tap()
 
@@ -110,7 +121,7 @@ final class thatDayUITests: XCTestCase {
         XCTAssertTrue(deleteConfirmation.waitForExistence(timeout: 5))
         deleteConfirmation.tap()
 
-        XCTAssertFalse(updatedListTitle.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.staticTexts["UI Test Blog Story Edited"].waitForExistence(timeout: 2))
     }
 
     @MainActor

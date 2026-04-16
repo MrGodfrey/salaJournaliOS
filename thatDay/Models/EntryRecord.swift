@@ -72,6 +72,10 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
         happenedAt.formatted(.dateTime.year().month(.wide).day())
     }
 
+    var cardDateTitle: String {
+        "\(weekdayTitle) · \(timelineTitle)"
+    }
+
     var searchableText: String {
         [title, body]
             .joined(separator: " ")

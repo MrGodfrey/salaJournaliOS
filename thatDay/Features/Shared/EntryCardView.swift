@@ -3,46 +3,34 @@ import SwiftUI
 struct EntryCardView: View {
     let entry: EntryRecord
     let imageURL: URL?
-    let showWeekdayBelow: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 0) {
-                cover
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(entry.title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 0) {
+            cover
+            VStack(alignment: .leading, spacing: 12) {
+                Text(entry.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                    Text(entry.summary)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
+                Text(entry.summary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
 
-                    HStack(alignment: .center) {
-                        Text(entry.timelineTitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(16)
-            }
-            .background(Color(.secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
-            )
-            .accessibilityIdentifier("entryCard-\(entry.id.uuidString)")
-
-            if showWeekdayBelow {
-                Text(entry.weekdayTitle)
+                Text(entry.cardDateTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, 4)
             }
+            .padding(16)
         }
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        )
+        .accessibilityIdentifier("entryCard-\(entry.id.uuidString)")
     }
 
     @ViewBuilder

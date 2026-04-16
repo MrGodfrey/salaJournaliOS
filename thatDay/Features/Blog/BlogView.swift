@@ -5,7 +5,6 @@ struct BlogView: View {
     @Bindable var store: AppStore
 
     @State private var navigationPath: [EntryDestination] = []
-    @State private var pendingDeletion: EntryRecord?
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -24,26 +23,13 @@ struct BlogView: View {
                         NavigationLink(value: EntryDestination.read(entry.id)) {
                             EntryCardView(
                                 entry: entry,
-                                imageURL: store.imageURL(for: entry),
-                                showWeekdayBelow: false
+                                imageURL: store.imageURL(for: entry)
                             )
                         }
                         .buttonStyle(.plain)
                         .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if store.canEditRepository {
-                                Button("删除", role: .destructive) {
-                                    pendingDeletion = entry
-                                }
-
-                                Button("编辑") {
-                                    navigationPath.append(.edit(entry.id))
-                                }
-                                .tint(.indigo)
-                            }
-                        }
                     }
                 }
             }
@@ -53,8 +39,7 @@ struct BlogView: View {
                 if let entry = store.entry(matching: destination.entryID) {
                     EntryDetailView(
                         store: store,
-                        entry: entry,
-                        startsInEditMode: destination.startsInEditMode
+                        entry: entry
                     )
                 } else {
                     ContentUnavailableView(
@@ -78,34 +63,6 @@ struct BlogView: View {
                 .padding(.trailing, 24)
                 .padding(.bottom, 20)
                 .accessibilityIdentifier("addBlogEntryButton")
-            }
-            .alert(
-                "删除这篇文章？",
-                isPresented: Binding(
-                    get: { pendingDeletion != nil },
-                    set: { value in
-                        if !value {
-                            pendingDeletion = nil
-                        }
-                    }
-                )
-            ) {
-                Button("删除", role: .destructive) {
-                    guard let entry = pendingDeletion else {
-                        return
-                    }
-
-                    Task {
-                        await store.deleteEntry(entry)
-                        pendingDeletion = nil
-                    }
-                }
-
-                Button("取消", role: .cancel) {
-                    pendingDeletion = nil
-                }
-            } message: {
-                Text("删除后将无法恢复。")
             }
         }
     }

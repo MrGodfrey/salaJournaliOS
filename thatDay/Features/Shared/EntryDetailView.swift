@@ -15,10 +15,10 @@ struct EntryDetailView: View {
     @State private var isSaving = false
     @State private var isShowingDeleteConfirmation = false
 
-    init(store: AppStore, entry: EntryRecord, startsInEditMode: Bool = false) {
+    init(store: AppStore, entry: EntryRecord) {
         self.store = store
         entryID = entry.id
-        _isEditing = State(initialValue: startsInEditMode)
+        _isEditing = State(initialValue: false)
         _draft = State(
             initialValue: EntryDraft(
                 kind: entry.kind,
