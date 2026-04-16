@@ -4,8 +4,11 @@ import SwiftUI
 struct BlogView: View {
     @Bindable var store: AppStore
 
+    @State private var navigationPath: [EntryDestination] = []
+    @State private var pendingDeletion: EntryRecord?
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             List {
                 if store.blogEntries.isEmpty {
                     ContentUnavailableView(
@@ -14,37 +17,95 @@ struct BlogView: View {
                         description: Text("先写下第一篇 Blog。")
                     )
                     .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .padding(.vertical, 48)
                 } else {
                     ForEach(store.blogEntries) { entry in
-                        EntryCardView(
-                            entry: entry,
-                            imageURL: store.imageURL(for: entry),
-                            canEdit: store.canEditRepository,
-                            showWeekdayBelow: false,
-                            onEdit: {
-                                store.showEditor(for: .blog, entry: entry)
-                            },
-                            onDelete: {
-                                Task { await store.deleteEntry(entry) }
-                            }
-                        )
+                        NavigationLink(value: EntryDestination.read(entry.id)) {
+                            EntryCardView(
+                                entry: entry,
+                                imageURL: store.imageURL(for: entry),
+                                showWeekdayBelow: false
+                            )
+                        }
+                        .buttonStyle(.plain)
                         .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0))
                         .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if store.canEditRepository {
+                                Button("删除", role: .destructive) {
+                                    pendingDeletion = entry
+                                }
+
+                                Button("编辑") {
+                                    navigationPath.append(.edit(entry.id))
+                                }
+                                .tint(.indigo)
+                            }
+                        }
                     }
                 }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Blog")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        store.showEditor(for: .blog)
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .disabled(!store.canEditRepository)
-                    .accessibilityIdentifier("addBlogEntryButton")
+            .navigationDestination(for: EntryDestination.self) { destination in
+                if let entry = store.entry(matching: destination.entryID) {
+                    EntryDetailView(
+                        store: store,
+                        entry: entry,
+                        startsInEditMode: destination.startsInEditMode
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "这篇文章已经不存在",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
                 }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Button {
+                    store.showEditor(for: .blog)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 56, height: 56)
+                        .background(Color.indigo, in: Circle())
+                        .shadow(color: Color.black.opacity(0.18), radius: 12, y: 6)
+                }
+                .disabled(!store.canEditRepository)
+                .padding(.trailing, 24)
+                .padding(.bottom, 20)
+                .accessibilityIdentifier("addBlogEntryButton")
+            }
+            .alert(
+                "删除这篇文章？",
+                isPresented: Binding(
+                    get: { pendingDeletion != nil },
+                    set: { value in
+                        if !value {
+                            pendingDeletion = nil
+                        }
+                    }
+                )
+            ) {
+                Button("删除", role: .destructive) {
+                    guard let entry = pendingDeletion else {
+                        return
+                    }
+
+                    Task {
+                        await store.deleteEntry(entry)
+                        pendingDeletion = nil
+                    }
+                }
+
+                Button("取消", role: .cancel) {
+                    pendingDeletion = nil
+                }
+            } message: {
+                Text("删除后将无法恢复。")
             }
         }
     }

@@ -3,10 +3,7 @@ import SwiftUI
 struct EntryCardView: View {
     let entry: EntryRecord
     let imageURL: URL?
-    let canEdit: Bool
     let showWeekdayBelow: Bool
-    let onEdit: (() -> Void)?
-    let onDelete: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -24,22 +21,9 @@ struct EntryCardView: View {
                         .lineLimit(3)
 
                     HStack(alignment: .center) {
-                        Text(showWeekdayBelow ? entry.timelineTitle : entry.weekdayTitle)
+                        Text(entry.timelineTitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-
-                        Spacer()
-
-                        if canEdit {
-                            Menu {
-                                Button("编辑", action: onEdit ?? {})
-                                Button("删除", role: .destructive, action: onDelete ?? {})
-                            } label: {
-                                Image(systemName: "ellipsis.circle")
-                                    .font(.title3)
-                            }
-                            .accessibilityIdentifier("entryMenu-\(entry.id.uuidString)")
-                        }
                     }
                 }
                 .padding(16)

@@ -149,18 +149,19 @@ final class AppStore {
     var searchResults: [EntryRecord] {
         let normalizedQuery = searchText.trimmed
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        let source = entries.sorted { lhs, rhs in
-            if lhs.updatedAt != rhs.updatedAt {
-                return lhs.updatedAt > rhs.updatedAt
-            }
-            return lhs.createdAt > rhs.createdAt
-        }
 
         guard !normalizedQuery.isEmpty else {
-            return source
+            return []
         }
 
-        return source.filter { $0.searchableText.contains(normalizedQuery) }
+        return entries
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return lhs.createdAt > rhs.createdAt
+            }
+            .filter { $0.searchableText.contains(normalizedQuery) }
     }
 
     var journalDates: [Date] {
@@ -223,7 +224,7 @@ final class AppStore {
         editorSession = nil
     }
 
-    func saveEntry(draft: EntryDraft, importedImageData: Data?) async -> Bool {
+    func saveEntry(draft: EntryDraft, importedImageData: Data?, editing editingEntry: EntryRecord? = nil) async -> Bool {
         guard canEditRepository else {
             alertMessage = "当前仓库是只读的，不能保存内容。"
             return false
@@ -243,18 +244,19 @@ final class AppStore {
         defer { isBusy = false }
 
         do {
+            let entryID = editingEntry?.id ?? UUID()
             let imageReference: String?
             if let importedImageData {
                 imageReference = try repositoryStore.storeImage(
                     data: importedImageData,
-                    suggestedID: editorSession?.entry?.id ?? UUID()
+                    suggestedID: entryID
                 )
             } else {
-                imageReference = normalized.imageReference.nilIfEmpty
+                imageReference = editingEntry?.imageReference
             }
 
             let timestamp = now()
-            if var existing = editorSession?.entry {
+            if var existing = editingEntry {
                 existing.title = normalized.title
                 existing.body = normalized.body
                 existing.happenedAt = normalized.happenedAt
@@ -267,6 +269,7 @@ final class AppStore {
             } else {
                 entries.append(
                     EntryRecord(
+                        id: entryID,
                         kind: normalized.kind,
                         title: normalized.title,
                         body: normalized.body,
@@ -308,6 +311,10 @@ final class AppStore {
         repositoryStore.imageURL(for: entry.imageReference)
     }
 
+    func entry(matching entryID: UUID) -> EntryRecord? {
+        entries.first { $0.id == entryID }
+    }
+
     func goToCalendar() {
         selectedTab = .calendar
     }
@@ -323,6 +330,31 @@ final class AppStore {
 
     func nextMonth() {
         displayedMonth = calendar.date(byAdding: .month, value: 1, to: displayedMonth) ?? displayedMonth
+    }
+
+    func setDisplayedMonth(year: Int, month: Int) {
+        var components = calendar.dateComponents([.day], from: displayedMonth)
+        components.year = year
+        components.month = month
+        components.day = 1
+
+        guard let date = calendar.date(from: components) else {
+            return
+        }
+
+        displayedMonth = calendar.startOfMonth(for: date)
+    }
+
+    func moveSelectedDate(by days: Int) {
+        guard let date = calendar.date(byAdding: .day, value: days, to: selectedDate) else {
+            return
+        }
+
+        selectDate(date)
+    }
+
+    func returnToToday() {
+        selectDate(now())
     }
 
     func presentSettings() {

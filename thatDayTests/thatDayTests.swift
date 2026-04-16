@@ -6,24 +6,82 @@ import XCTest
 final class thatDayTests: XCTestCase {
     @MainActor
     func testJournalSectionsGroupEntriesByMonthDayAcrossYears() async throws {
-        let store = makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
+        let entries = [
+            makeEntry(title: "2026", happenedAt: fixtureDate("2026-04-16T09:00:00Z")),
+            makeEntry(title: "2025", happenedAt: fixtureDate("2025-04-16T08:00:00Z")),
+            makeEntry(title: "2024", happenedAt: fixtureDate("2024-04-16T07:00:00Z")),
+            makeEntry(title: "2023", happenedAt: fixtureDate("2023-04-16T06:00:00Z")),
+            makeEntry(title: "Ignore me", happenedAt: fixtureDate("2026-04-18T06:00:00Z"))
+        ]
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: entries
+        )
 
         await store.loadIfNeeded()
 
         XCTAssertEqual(store.journalSections.map(\.year), [2026, 2025, 2024, 2023])
-        XCTAssertEqual(store.journalSections.first?.entries.first?.title, "The Quiet Morning Echoes")
+        XCTAssertEqual(store.journalSections.first?.entries.first?.title, "2026")
+    }
+
+    @MainActor
+    func testEmptySearchDoesNotShowAnyResults() async throws {
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: [makeEntry(title: "Welcome", happenedAt: fixtureDate("2026-04-16T09:00:00Z"))]
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertTrue(store.searchResults.isEmpty)
     }
 
     @MainActor
     func testSearchMatchesJournalAndBlogContent() async throws {
-        let store = makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
+        let entries = [
+            makeEntry(title: "Morning Journal", happenedAt: fixtureDate("2026-04-16T09:00:00Z")),
+            makeEntry(
+                kind: .blog,
+                title: "The Art of Morning Stillness",
+                body: "A quiet morning changes the whole day.",
+                happenedAt: fixtureDate("2026-04-15T09:00:00Z")
+            )
+        ]
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: entries
+        )
 
         await store.loadIfNeeded()
         store.searchText = "morning"
 
         let titles = store.searchResults.map(\.title)
-        XCTAssertTrue(titles.contains("The Quiet Morning Echoes"))
+        XCTAssertTrue(titles.contains("Morning Journal"))
         XCTAssertTrue(titles.contains("The Art of Morning Stillness"))
+    }
+
+    @MainActor
+    func testMovingSelectedDateAndReturningToToday() async throws {
+        let store = try makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
+        await store.loadIfNeeded()
+
+        store.moveSelectedDate(by: 1)
+        XCTAssertEqual(Calendar.current.dayIdentifier(for: store.selectedDate), "2026-04-17")
+
+        store.returnToToday()
+        XCTAssertEqual(Calendar.current.dayIdentifier(for: store.selectedDate), "2026-04-16")
+    }
+
+    @MainActor
+    func testSettingDisplayedMonthUpdatesMonthAndYear() async throws {
+        let store = try makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
+        await store.loadIfNeeded()
+
+        store.setDisplayedMonth(year: 2024, month: 2)
+
+        XCTAssertEqual(Calendar.current.component(.year, from: store.displayedMonth), 2024)
+        XCTAssertEqual(Calendar.current.component(.month, from: store.displayedMonth), 2)
+        XCTAssertEqual(Calendar.current.component(.day, from: store.displayedMonth), 1)
     }
 
     func testCalendarGridBuildsCompleteWeeksAndSelection() {
@@ -65,8 +123,7 @@ final class thatDayTests: XCTestCase {
                 kind: .blog,
                 title: "A New Persisted Blog",
                 body: "Saved from unit tests.",
-                happenedAt: fixtureDate("2026-04-16T09:00:00Z"),
-                imageReference: ""
+                happenedAt: fixtureDate("2026-04-16T09:00:00Z")
             ),
             importedImageData: nil
         )
@@ -133,11 +190,32 @@ final class thatDayTests: XCTestCase {
     }
 
     @MainActor
-    private func makeStore(now: Date) -> AppStore {
-        AppStore(
-            repositoryStore: LocalRepositoryStore(rootURL: makeTempDirectory()),
+    private func makeStore(now: Date, entries: [EntryRecord]? = nil) throws -> AppStore {
+        let repositoryStore = LocalRepositoryStore(rootURL: makeTempDirectory())
+        if let entries {
+            try repositoryStore.saveSnapshot(RepositorySnapshot(entries: entries, updatedAt: now))
+        }
+
+        return AppStore(
+            repositoryStore: repositoryStore,
             cloudService: MockCloudRepositoryService(),
             now: { now }
+        )
+    }
+
+    private func makeEntry(
+        kind: EntryKind = .journal,
+        title: String,
+        body: String = "Body",
+        happenedAt: Date
+    ) -> EntryRecord {
+        EntryRecord(
+            kind: kind,
+            title: title,
+            body: body,
+            happenedAt: happenedAt,
+            createdAt: happenedAt,
+            updatedAt: happenedAt
         )
     }
 

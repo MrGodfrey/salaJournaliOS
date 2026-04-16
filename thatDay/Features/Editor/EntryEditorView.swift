@@ -21,8 +21,7 @@ struct EntryEditorView: View {
                 kind: session.kind,
                 title: session.entry?.title ?? "",
                 body: session.entry?.body ?? "",
-                happenedAt: session.entry?.happenedAt ?? session.defaultDate,
-                imageReference: session.entry?.imageReference ?? ""
+                happenedAt: session.entry?.happenedAt ?? session.defaultDate
             )
         )
     }
@@ -30,40 +29,12 @@ struct EntryEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("内容") {
-                    TextField("标题", text: $draft.title)
-                        .accessibilityIdentifier("entryTitleField")
-
-                    DatePicker("日期", selection: $draft.happenedAt, displayedComponents: [.date])
-                        .accessibilityIdentifier("entryDatePicker")
-                }
-
-                Section("图片") {
-                    TextField("图片链接（可选）", text: $draft.imageReference, axis: .vertical)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        .accessibilityIdentifier("entryImageReferenceField")
-
-                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                        Label("从相册选择图片", systemImage: "photo.on.rectangle")
-                    }
-
-                    if let importedImageData,
-                       let image = UIImage(data: importedImageData) {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(height: 180)
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                }
-
-                Section("正文") {
-                    TextEditor(text: $draft.body)
-                        .frame(minHeight: 220)
-                        .accessibilityIdentifier("entryBodyEditor")
-                }
+                EntryFormSections(
+                    draft: $draft,
+                    selectedPhoto: $selectedPhoto,
+                    importedImageData: importedImageData,
+                    existingImageURL: session.entry.flatMap { store.imageURL(for: $0) }
+                )
             }
             .navigationTitle(session.mode == .create ? "新建 \(session.kind.title)" : "编辑 \(session.kind.title)")
             .navigationBarTitleDisplayMode(.inline)
@@ -99,7 +70,11 @@ struct EntryEditorView: View {
         isSaving = true
         defer { isSaving = false }
 
-        let didSave = await store.saveEntry(draft: draft, importedImageData: importedImageData)
+        let didSave = await store.saveEntry(
+            draft: draft,
+            importedImageData: importedImageData,
+            editing: session.entry
+        )
         if didSave {
             dismiss()
         }
