@@ -1,0 +1,101 @@
+import Foundation
+
+struct LocalRepositoryStore {
+    let rootURL: URL
+    let archiveURL: URL
+    let descriptorURL: URL
+    let imagesURL: URL
+
+    init(rootURL: URL) {
+        self.rootURL = rootURL
+        archiveURL = rootURL.appendingPathComponent("repository.json")
+        descriptorURL = rootURL.appendingPathComponent("descriptor.json")
+        imagesURL = rootURL.appendingPathComponent("images", isDirectory: true)
+    }
+
+    static func live(processInfo: ProcessInfo = .processInfo) -> LocalRepositoryStore {
+        let rootURL: URL
+        if let override = processInfo.environment["THATDAY_STORAGE_ROOT"]?.trimmed.nilIfEmpty {
+            rootURL = URL(fileURLWithPath: override, isDirectory: true)
+        } else {
+            let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            rootURL = baseURL.appendingPathComponent("thatDay", isDirectory: true)
+        }
+
+        return LocalRepositoryStore(rootURL: rootURL)
+    }
+
+    func loadSnapshot() throws -> RepositorySnapshot? {
+        guard FileManager.default.fileExists(atPath: archiveURL.path) else {
+            return nil
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(RepositorySnapshot.self, from: Data(contentsOf: archiveURL))
+    }
+
+    func saveSnapshot(_ snapshot: RepositorySnapshot) throws {
+        try ensureDirectories()
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(snapshot)
+        try data.write(to: archiveURL, options: .atomic)
+    }
+
+    func loadDescriptor() throws -> RepositoryDescriptor? {
+        guard FileManager.default.fileExists(atPath: descriptorURL.path) else {
+            return nil
+        }
+
+        let decoder = JSONDecoder()
+        return try decoder.decode(RepositoryDescriptor.self, from: Data(contentsOf: descriptorURL))
+    }
+
+    func saveDescriptor(_ descriptor: RepositoryDescriptor) throws {
+        try ensureDirectories()
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(descriptor)
+        try data.write(to: descriptorURL, options: .atomic)
+    }
+
+    func storeImage(data: Data, suggestedID: UUID) throws -> String {
+        try ensureDirectories()
+        let filename = "\(suggestedID.uuidString).jpg"
+        let fileURL = imagesURL.appendingPathComponent(filename)
+        try data.write(to: fileURL, options: .atomic)
+        return filename
+    }
+
+    func imageURL(for reference: String?) -> URL? {
+        guard let value = reference?.trimmed.nilIfEmpty else {
+            return nil
+        }
+
+        if let remoteURL = URL(string: value),
+           let scheme = remoteURL.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            return remoteURL
+        }
+
+        return imagesURL.appendingPathComponent(value)
+    }
+
+    func reset() throws {
+        guard FileManager.default.fileExists(atPath: rootURL.path) else {
+            return
+        }
+
+        try FileManager.default.removeItem(at: rootURL)
+    }
+
+    private func ensureDirectories() throws {
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: imagesURL, withIntermediateDirectories: true)
+    }
+}

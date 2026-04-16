@@ -1,43 +1,76 @@
-//
-//  thatDayUITests.swift
-//  thatDayUITests
-//
-//  Created by 王宇 on 2026/4/16.
-//
-
 import XCTest
 
 final class thatDayUITests: XCTestCase {
-
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testCalendarDateSelectionReturnsToJournal() throws {
+        let app = launchApp()
+
+        XCTAssertTrue(app.buttons["openCalendarButton"].waitForExistence(timeout: 5))
+        app.buttons["openCalendarButton"].tap()
+
+        let targetDay = app.buttons["calendarDay-2026-04-17"]
+        XCTAssertTrue(targetDay.waitForExistence(timeout: 5))
+        targetDay.tap()
+
+        let header = app.staticTexts["journalHeaderDate"]
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        XCTAssertEqual(header.label, "April 17")
+    }
+
+    @MainActor
+    func testCreateBlogPostAppearsInSearch() throws {
+        let app = launchApp()
+
+        app.tabBars.buttons["Blog"].tap()
+        XCTAssertTrue(app.buttons["addBlogEntryButton"].waitForExistence(timeout: 5))
+        app.buttons["addBlogEntryButton"].tap()
+
+        let titleField = app.textFields["entryTitleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.tap()
+        titleField.typeText("UI Test Blog Story")
+
+        let bodyEditor = app.otherElements["entryBodyEditor"]
+        XCTAssertTrue(bodyEditor.waitForExistence(timeout: 5))
+        bodyEditor.tap()
+        bodyEditor.typeText("This blog post is written during UI testing.")
+
+        app.buttons["saveEntryButton"].tap()
+        XCTAssertTrue(app.staticTexts["UI Test Blog Story"].waitForExistence(timeout: 5))
+
+        app.tabBars.buttons["Search"].tap()
+
+        let searchField = app.textFields["searchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 5))
+        searchField.tap()
+        searchField.typeText("UI Test Blog Story")
+
+        XCTAssertTrue(app.staticTexts["UI Test Blog Story"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testSettingsSheetOpensFromJournal() throws {
+        let app = launchApp()
+
+        XCTAssertTrue(app.buttons["openSettingsButton"].waitForExistence(timeout: 5))
+        app.buttons["openSettingsButton"].tap()
+
+        XCTAssertTrue(app.buttons["acceptShareLinkButton"].waitForExistence(timeout: 5))
+    }
+
+    private func launchApp() -> XCUIApplication {
         let app = XCUIApplication()
+        let storageRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("thatDay-ui-\(UUID().uuidString)", isDirectory: true)
+
+        app.launchEnvironment["THATDAY_STORAGE_ROOT"] = storageRoot.path
+        app.launchEnvironment["THATDAY_RESET_STORAGE"] = "1"
+        app.launchEnvironment["THATDAY_REFERENCE_DATE"] = "2026-04-16T09:00:00Z"
         app.launch()
-
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // XCUIAutomation Documentation
-        // https://developer.apple.com/documentation/xcuiautomation
-    }
-
-    @MainActor
-    func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
-        }
+        return app
     }
 }

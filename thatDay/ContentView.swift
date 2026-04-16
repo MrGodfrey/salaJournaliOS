@@ -1,61 +1,75 @@
-//
-//  ContentView.swift
-//  thatDay
-//
-//  Created by 王宇 on 2026/4/16.
-//
-
+import Observation
 import SwiftUI
-import SwiftData
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @Bindable var store: AppStore
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
+        TabView(selection: $store.selectedTab) {
+            JournalView(store: store)
+                .tabItem {
+                    Label("Journal", systemImage: "book.closed")
+                }
+                .tag(AppTab.journal)
+
+            CalendarView(store: store)
+                .tabItem {
+                    Label("Calendar", systemImage: "calendar")
+                }
+                .tag(AppTab.calendar)
+
+            SearchView(store: store)
+                .tabItem {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
+                .tag(AppTab.search)
+
+            BlogView(store: store)
+                .tabItem {
+                    Label("Blog", systemImage: "doc.text.image")
+                }
+                .tag(AppTab.blog)
+        }
+        .tint(Color.indigo)
+        .task {
+            await store.loadIfNeeded()
+        }
+        .overlay(alignment: .center) {
+            if store.isBusy {
+                ProgressView("处理中...")
+                    .padding(20)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .sheet(item: $store.editorSession) { session in
+            EntryEditorView(
+                store: store,
+                session: session
+            )
+        }
+        .sheet(isPresented: $store.isShowingSettings) {
+            SettingsView(store: store)
+        }
+        .alert(
+            "提示",
+            isPresented: Binding(
+                get: { store.alertMessage != nil },
+                set: { value in
+                    if !value {
+                        store.alertMessage = nil
                     }
                 }
-                .onDelete(perform: deleteItems)
-            }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
-            }
+            )
+        ) {
+            Button("确定", role: .cancel) {}
+        } message: {
+            Text(store.alertMessage ?? "")
         }
     }
 }
 
 #Preview {
-    ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+    ContentView(
+        store: AppStore.preview()
+    )
 }
