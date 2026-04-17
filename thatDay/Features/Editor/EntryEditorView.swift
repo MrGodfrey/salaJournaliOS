@@ -33,7 +33,8 @@ struct EntryEditorView: View {
                     draft: $draft,
                     selectedPhoto: $selectedPhoto,
                     importedImageData: importedImageData,
-                    existingImageURL: session.entry.flatMap { store.imageURL(for: $0) }
+                    existingImageURL: session.entry.flatMap { store.imageURL(for: $0) },
+                    imageRefreshVersion: store.imageRefreshVersion
                 )
             }
             .navigationTitle(session.mode == .create ? "新建 \(session.kind.title)" : "编辑 \(session.kind.title)")

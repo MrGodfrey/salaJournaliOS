@@ -121,6 +121,7 @@ final class AppStore {
     var isAuthenticating = false
     var transferProgress: RepositoryTransferProgress?
     var exportedArchiveItem: ExportedArchiveItem?
+    var imageRefreshVersion = 0
 
     private(set) var entries: [EntryRecord] = []
     private(set) var repositoryDescriptor: RepositoryDescriptor = .local
@@ -358,6 +359,7 @@ final class AppStore {
 
         do {
             let entryID = editingEntry?.id ?? UUID()
+            let didReplaceImage = importedImageData != nil
             let imageReference: String?
             if let importedImageData {
                 imageReference = try currentRepositoryStore.storeImage(
@@ -395,6 +397,9 @@ final class AppStore {
             }
 
             try await persistEntries()
+            if didReplaceImage {
+                invalidateImageViews()
+            }
             editorSession = nil
             return true
         } catch {
@@ -753,6 +758,7 @@ final class AppStore {
 
             entries = importedSnapshot.entries
             try await persistEntries()
+            invalidateImageViews()
             transferProgress = nil
         } catch {
             transferProgress = nil
@@ -861,6 +867,7 @@ final class AppStore {
         let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
         try repositoryStore.saveDescriptor(accepted.descriptor)
         try repositoryStore.saveCloudSnapshot(accepted.snapshot)
+        invalidateImageViews()
 
         upsertRepositoryReference(
             repositoryID: repositoryID,
@@ -911,6 +918,7 @@ final class AppStore {
             let snapshot = try await cloudService.loadSnapshot(using: repositoryDescriptor)
             entries = snapshot.entries
             try repositoryStore.saveCloudSnapshot(snapshot)
+            invalidateImageViews()
             upsertRepositoryReference(
                 repositoryID: currentRepositoryID,
                 descriptor: repositoryDescriptor,
@@ -1034,6 +1042,7 @@ final class AppStore {
         if reference.id == currentRepositoryID {
             repositoryDescriptor = reference.descriptor
             entries = remoteSnapshot.entries
+            invalidateImageViews()
         }
 
         guard shouldNotify,
@@ -1164,6 +1173,10 @@ final class AppStore {
         }
 
         return "发生了未预期的错误。"
+    }
+
+    private func invalidateImageViews() {
+        imageRefreshVersion &+= 1
     }
 }
 

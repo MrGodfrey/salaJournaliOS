@@ -1,14 +1,17 @@
 import SwiftUI
+import UIKit
 
 struct EntryCardView: View {
     let entry: EntryRecord
     let imageURL: URL?
+    let imageRefreshVersion: Int
 
     var body: some View {
         Group {
             if let imageURL {
                 VStack(alignment: .leading, spacing: 0) {
                     coverImage(for: imageURL)
+                        .id("cover-\(entry.id.uuidString)-\(imageRefreshVersion)")
                     cardText
                         .padding(16)
                 }
@@ -47,21 +50,29 @@ struct EntryCardView: View {
 
     @ViewBuilder
     private func coverImage(for imageURL: URL) -> some View {
-        AsyncImage(url: imageURL) { phase in
-            switch phase {
-            case .empty:
-                Color(.tertiarySystemGroupedBackground)
-                    .overlay {
-                        ProgressView()
-                    }
-            case .success(let image):
-                image
+        Group {
+            if let image = imageURL.repositoryLocalImage {
+                Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
-            case .failure:
-                Color(.tertiarySystemGroupedBackground)
-            @unknown default:
-                Color(.tertiarySystemGroupedBackground)
+            } else {
+                AsyncImage(url: imageURL) { phase in
+                    switch phase {
+                    case .empty:
+                        Color(.tertiarySystemGroupedBackground)
+                            .overlay {
+                                ProgressView()
+                            }
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure:
+                        Color(.tertiarySystemGroupedBackground)
+                    @unknown default:
+                        Color(.tertiarySystemGroupedBackground)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity)

@@ -115,6 +115,40 @@
     - 单元测试 `18/18` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-36-43-+0800.xcresult`
 
+## 2026-04-17 15:47
+
+- 修复导入后当前设备看不到本地图片的问题：仓库内 `file://` 图片现在统一改为直接用 `UIImage(contentsOfFile:)` 从沙盒文件读取，避免导入过程中同一路径文件被覆盖后，当前设备继续沿用 `AsyncImage` 的失败态
+- 调整图片展示入口：
+  - 文章卡片封面
+  - 文章详情页头图
+  - 编辑页已有图片预览
+- 新增单元测试：
+  - `testRepositoryLocalImageLoadsFileURLAndSkipsRemoteURL`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `21/21` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-48-54-+0800.xcresult`
+
+## 2026-04-17 16:10
+
+- 继续定位“导出 ZIP 再导回同仓库后图片消失”：
+  - 新增回归测试 `testExportThenImportIntoSameRepositoryKeepsLoadableImage`
+  - 新增路径别名回归测试 `testRepositoryArchiveRoundTripRestoresImagesForTmpSymlinkPaths`
+- 确认根因不在文章数据本身，而在归档服务用绝对路径字符串替换计算相对路径：
+  - 当同一目录可能同时出现 `/tmp/...` 和 `/private/tmp/...` 这类等价前缀时，图片会被打包到错误的 `privateimages/` 路径
+  - 导入后 `repository.json` 里的 `imageReference` 仍然是 `images/<uuid>.jpg` 语义，但实际图片文件落在错误目录，所以当前设备读不到
+- 修复 `RepositoryArchiveService`：
+  - 导入导出时统一基于标准化后的 URL 计算仓库内相对路径，避免图片被归档到错误目录
+  - 保留图片视图刷新版本号，在导入、换图、共享刷新后强制重建本地图片视图，避免同路径文件替换后停留在旧状态
+- 手工验证记录：
+  - 在本地调试场景里先复现出无图卡片，再在修复后确认 Blog 卡片封面恢复
+  - 修复后截图：`/tmp/thatday-manual-eFVbuF/self-import-blog-fixed-2.png`
+  - 修复后仓库图片已回到正确目录：`/tmp/thatday-manual-eFVbuF/repositories/local/images/EEE4CF13-0E8F-48F0-A8A2-248B06A20C6B.jpg`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `23/23` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_16-11-21-+0800.xcresult`
+
 ## 2026-04-17 15:44
 
 - 共享仓库更新提醒补上应用角标：

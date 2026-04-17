@@ -23,7 +23,8 @@ struct BlogView: View {
                         NavigationLink(value: EntryDestination.read(entry.id)) {
                             EntryCardView(
                                 entry: entry,
-                                imageURL: store.imageURL(for: entry)
+                                imageURL: store.imageURL(for: entry),
+                                imageRefreshVersion: store.imageRefreshVersion
                             )
                         }
                         .navigationLinkIndicatorVisibility(.hidden)

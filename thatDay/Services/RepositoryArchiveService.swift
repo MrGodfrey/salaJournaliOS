@@ -3,6 +3,7 @@ import Foundation
 enum RepositoryArchiveError: LocalizedError {
     case invalidArchive
     case importPermissionDenied
+    case invalidRepositoryPath
 
     var errorDescription: String? {
         switch self {
@@ -10,6 +11,8 @@ enum RepositoryArchiveError: LocalizedError {
             "导入的 ZIP 不是 thatDay 导出的有效仓库。"
         case .importPermissionDenied:
             "无法读取所选 ZIP 文件，请重新选择后再试。"
+        case .invalidRepositoryPath:
+            "仓库里的文件路径无效，无法完成导入导出。"
         }
     }
 }
@@ -53,7 +56,7 @@ struct RepositoryArchiveService {
         var completedFiles = 0
 
         for fileURL in files {
-            let relativePath = fileURL.path.replacingOccurrences(of: repositoryStore.rootURL.path + "/", with: "")
+            let relativePath = try relativePath(for: fileURL, inside: repositoryStore.rootURL)
             let destinationURL = repositoryDirectory.appendingPathComponent(relativePath)
             try fileManager.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             if fileManager.fileExists(atPath: destinationURL.path) {
@@ -130,11 +133,11 @@ struct RepositoryArchiveService {
 
         try repositoryStore.resetContents()
 
-        let destinationFiles = sourceFiles.map { sourceURL in
+        let destinationFiles = try sourceFiles.map { sourceURL in
             (
                 source: sourceURL,
                 destination: repositoryStore.rootURL.appendingPathComponent(
-                    sourceURL.path.replacingOccurrences(of: repositoryDirectory.path + "/", with: "")
+                    try relativePath(for: sourceURL, inside: repositoryDirectory)
                 )
             )
         }
@@ -178,6 +181,25 @@ struct RepositoryArchiveService {
         }
 
         throw RepositoryArchiveError.invalidArchive
+    }
+
+    private func relativePath(for fileURL: URL, inside rootURL: URL) throws -> String {
+        let normalizedFileURL = fileURL.standardizedFileURL.resolvingSymlinksInPath()
+        let normalizedRootURL = rootURL.standardizedFileURL.resolvingSymlinksInPath()
+        let fileComponents = normalizedFileURL.pathComponents
+        let rootComponents = normalizedRootURL.pathComponents
+
+        guard fileComponents.starts(with: rootComponents) else {
+            throw RepositoryArchiveError.invalidRepositoryPath
+        }
+
+        let relativeComponents = Array(fileComponents.dropFirst(rootComponents.count))
+        let relativePath = NSString.path(withComponents: relativeComponents).trimmed
+        guard !relativePath.isEmpty else {
+            throw RepositoryArchiveError.invalidRepositoryPath
+        }
+
+        return relativePath
     }
 }
 

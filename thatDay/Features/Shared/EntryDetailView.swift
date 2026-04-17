@@ -1,6 +1,7 @@
 import Observation
 import PhotosUI
 import SwiftUI
+import UIKit
 
 struct EntryDetailView: View {
     @Environment(\.dismiss) private var dismiss
@@ -97,7 +98,8 @@ struct EntryDetailView: View {
                     draft: $draft,
                     selectedPhoto: $selectedPhoto,
                     importedImageData: importedImageData,
-                    existingImageURL: store.imageURL(for: entry)
+                    existingImageURL: store.imageURL(for: entry),
+                    imageRefreshVersion: store.imageRefreshVersion
                 )
 
                 Section {
@@ -143,27 +145,36 @@ struct EntryDetailView: View {
     @ViewBuilder
     private func readerCover(for entry: EntryRecord) -> some View {
         if let imageURL = store.imageURL(for: entry) {
-            AsyncImage(url: imageURL) { phase in
-                switch phase {
-                case .empty:
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 0, style: .continuous)
-                            .fill(Color(.secondarySystemGroupedBackground))
-
-                        ProgressView()
-                    }
-                case .success(let image):
-                    image
+            Group {
+                if let image = imageURL.repositoryLocalImage {
+                    Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
-                case .failure:
-                    RoundedRectangle(cornerRadius: 0, style: .continuous)
-                        .fill(Color(.secondarySystemGroupedBackground))
-                @unknown default:
-                    RoundedRectangle(cornerRadius: 0, style: .continuous)
-                        .fill(Color(.secondarySystemGroupedBackground))
+                } else {
+                    AsyncImage(url: imageURL) { phase in
+                        switch phase {
+                        case .empty:
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 0, style: .continuous)
+                                    .fill(Color(.secondarySystemGroupedBackground))
+
+                                ProgressView()
+                            }
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        case .failure:
+                            RoundedRectangle(cornerRadius: 0, style: .continuous)
+                                .fill(Color(.secondarySystemGroupedBackground))
+                        @unknown default:
+                            RoundedRectangle(cornerRadius: 0, style: .continuous)
+                                .fill(Color(.secondarySystemGroupedBackground))
+                        }
+                    }
                 }
             }
+            .id("detail-cover-\(entry.id.uuidString)-\(store.imageRefreshVersion)")
             .frame(maxWidth: .infinity)
             .frame(height: 260)
             .clipped()

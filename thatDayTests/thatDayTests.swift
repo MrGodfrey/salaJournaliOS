@@ -172,6 +172,15 @@ final class thatDayTests: XCTestCase {
         XCTAssertNil(store.imageURL(for: store.imagesURL.appendingPathComponent("missing.jpg").absoluteString))
     }
 
+    func testRepositoryLocalImageLoadsFileURLAndSkipsRemoteURL() throws {
+        let rootURL = makeTempDirectory()
+        let fileURL = rootURL.appendingPathComponent("preview.png")
+        try XCTUnwrap(makePreviewImageData()).write(to: fileURL, options: .atomic)
+
+        XCTAssertNotNil(fileURL.repositoryLocalImage)
+        XCTAssertNil(URL(string: "https://example.com/cover.jpg")?.repositoryLocalImage)
+    }
+
     @MainActor
     func testBiometricLockAuthenticatesOnLaunchAndOnlyReauthenticatesAfterBackground() async throws {
         let storageRoot = makeTempDirectory()
@@ -548,6 +557,101 @@ final class thatDayTests: XCTestCase {
 
         XCTAssertEqual(importedSnapshot.entries.map(\.title), ["Export Me"])
         XCTAssertNotNil(try destinationStore.exportableFileURLs().first(where: { $0.lastPathComponent.hasSuffix(".jpg") }))
+    }
+
+    func testRepositoryArchiveRoundTripRestoresImagesForTmpSymlinkPaths() async throws {
+        let rootURL = URL(fileURLWithPath: "/tmp/thatDay-archive-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.removeItem(at: rootURL)
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+
+        let sourceStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("source", isDirectory: true))
+        let destinationStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("destination", isDirectory: true))
+        let imageData = try XCTUnwrap(makePreviewImageData())
+        let entryID = UUID()
+        let imageReference = try sourceStore.storeImage(data: imageData, suggestedID: entryID)
+        let snapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    id: entryID,
+                    kind: .blog,
+                    title: "Tmp Path Image",
+                    body: "Archive body",
+                    happenedAt: fixtureDate("2026-04-16T09:00:00Z"),
+                    createdAt: fixtureDate("2026-04-16T09:00:00Z"),
+                    updatedAt: fixtureDate("2026-04-16T09:00:00Z"),
+                    imageReference: imageReference
+                )
+            ],
+            updatedAt: fixtureDate("2026-04-16T09:00:00Z")
+        )
+
+        try sourceStore.saveDescriptor(.local)
+        try sourceStore.saveSnapshot(snapshot)
+
+        let zipURL = try await RepositoryArchiveService().exportArchive(
+            from: sourceStore,
+            repositoryID: RepositoryReference.localRepositoryID,
+            repositoryName: "Tmp Repo"
+        ) { _, _ in }
+
+        let importedSnapshot = try await RepositoryArchiveService().importArchive(
+            from: zipURL,
+            into: destinationStore,
+            preserving: .local
+        ) { _, _ in }
+
+        let importedEntry = try XCTUnwrap(importedSnapshot.entries.first)
+        let importedImageURL = try XCTUnwrap(destinationStore.imageURL(for: importedEntry.imageReference))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: importedImageURL.path))
+        XCTAssertNotNil(importedImageURL.repositoryLocalImage)
+    }
+
+    @MainActor
+    func testExportThenImportIntoSameRepositoryKeepsLoadableImage() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let repositoryStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let cloudService = MockCloudRepositoryService()
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T09:00:00Z") }
+        )
+        let imageData = try XCTUnwrap(makePreviewImageData())
+
+        try repositoryStore.saveDescriptor(.local)
+        let imageReference = try repositoryStore.storeImage(data: imageData, suggestedID: UUID())
+        try repositoryStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    EntryRecord(
+                        kind: .blog,
+                        title: "Self Import",
+                        body: "Round trip",
+                        happenedAt: fixtureDate("2026-04-16T09:00:00Z"),
+                        createdAt: fixtureDate("2026-04-16T09:00:00Z"),
+                        updatedAt: fixtureDate("2026-04-16T09:00:00Z"),
+                        imageReference: imageReference
+                    )
+                ],
+                updatedAt: fixtureDate("2026-04-16T09:00:00Z")
+            )
+        )
+
+        await store.loadIfNeeded()
+        let exportedURL = try await RepositoryArchiveService().exportArchive(
+            from: repositoryStore,
+            repositoryID: RepositoryReference.localRepositoryID,
+            repositoryName: "Self Import"
+        ) { _, _ in }
+
+        await store.importRepositoryArchive(from: exportedURL)
+
+        let importedEntry = try XCTUnwrap(store.entries.first)
+        let importedImageURL = try XCTUnwrap(store.imageURL(for: importedEntry))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: importedImageURL.path))
+        XCTAssertNotNil(importedImageURL.repositoryLocalImage)
+        XCTAssertGreaterThan(try Data(contentsOf: importedImageURL).count, 0)
     }
 
     func testImportArchiveStartsAndStopsSecurityScopedAccess() async throws {

@@ -8,6 +8,7 @@ struct EntryFormSections: View {
 
     let importedImageData: Data?
     let existingImageURL: URL?
+    let imageRefreshVersion: Int
 
     var body: some View {
         Section("信息") {
@@ -46,21 +47,30 @@ struct EntryFormSections: View {
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else if let existingImageURL {
-            AsyncImage(url: existingImageURL) { phase in
-                switch phase {
-                case .empty:
-                    ProgressView()
-                        .frame(maxWidth: .infinity, minHeight: 180)
-                case .success(let image):
-                    image
+            Group {
+                if let image = existingImageURL.repositoryLocalImage {
+                    Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
-                case .failure:
-                    EmptyView()
-                @unknown default:
-                    EmptyView()
+                } else {
+                    AsyncImage(url: existingImageURL) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                                .frame(maxWidth: .infinity, minHeight: 180)
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        case .failure:
+                            EmptyView()
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
                 }
             }
+            .id("editor-image-\(existingImageURL.absoluteString)-\(imageRefreshVersion)")
             .frame(height: 180)
             .frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
