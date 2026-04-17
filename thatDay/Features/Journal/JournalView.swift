@@ -64,6 +64,9 @@ struct JournalView: View {
                     )
                 }
             }
+            .refreshable {
+                await store.refreshSharedRepositories(trigger: .manual)
+            }
             .task(id: store.entryOpenRequest?.id) {
                 guard let destination = store.consumeEntryOpenRequest(for: .journal) else {
                     return

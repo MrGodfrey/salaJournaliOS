@@ -46,6 +46,24 @@ struct LocalRepositoryStore {
         try data.write(to: archiveURL, options: .atomic)
     }
 
+    func makeSnapshot(
+        entries: [EntryRecord],
+        updatedAt: Date = Date(),
+        embeddingImages: Bool = false
+    ) throws -> RepositorySnapshot {
+        let embeddedImages = embeddingImages ? try embeddedImages(for: entries) : []
+        return RepositorySnapshot(
+            entries: entries,
+            updatedAt: updatedAt,
+            embeddedImages: embeddedImages
+        )
+    }
+
+    func saveCloudSnapshot(_ snapshot: RepositorySnapshot) throws {
+        try syncEmbeddedImages(snapshot.embeddedImages)
+        try saveSnapshot(snapshot.removingEmbeddedImages())
+    }
+
     func loadDescriptor() throws -> RepositoryDescriptor? {
         guard FileManager.default.fileExists(atPath: descriptorURL.path) else {
             return nil
@@ -66,9 +84,10 @@ struct LocalRepositoryStore {
 
     func storeImage(data: Data, suggestedID: UUID) throws -> String {
         try ensureDirectories()
+        let compressedData = try EntryImageCompressor.compressedData(for: data)
         let filename = "\(suggestedID.uuidString).jpg"
         let fileURL = imagesURL.appendingPathComponent(filename)
-        try data.write(to: fileURL, options: .atomic)
+        try compressedData.write(to: fileURL, options: .atomic)
         return filename
     }
 
@@ -83,7 +102,11 @@ struct LocalRepositoryStore {
             return remoteURL
         }
 
-        return imagesURL.appendingPathComponent(value)
+        guard let localReference = normalizedLocalImageReference(value) else {
+            return nil
+        }
+
+        return imagesURL.appendingPathComponent(localReference)
     }
 
     func exportableFileURLs() throws -> [URL] {
@@ -131,5 +154,59 @@ struct LocalRepositoryStore {
     private func ensureDirectories() throws {
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: imagesURL, withIntermediateDirectories: true)
+    }
+
+    private func embeddedImages(for entries: [EntryRecord]) throws -> [RepositoryImageAsset] {
+        var seen: Set<String> = []
+
+        return try entries.compactMap { entry in
+            guard let reference = normalizedLocalImageReference(entry.imageReference),
+                  seen.insert(reference).inserted else {
+                return nil
+            }
+
+            let fileURL = imagesURL.appendingPathComponent(reference)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                return nil
+            }
+
+            return RepositoryImageAsset(reference: reference, data: try Data(contentsOf: fileURL))
+        }
+    }
+
+    private func syncEmbeddedImages(_ embeddedImages: [RepositoryImageAsset]) throws {
+        guard !embeddedImages.isEmpty else {
+            return
+        }
+
+        try ensureDirectories()
+
+        for asset in embeddedImages {
+            guard let reference = normalizedLocalImageReference(asset.reference) else {
+                continue
+            }
+
+            let fileURL = imagesURL.appendingPathComponent(reference)
+            try asset.data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    private func normalizedLocalImageReference(_ reference: String?) -> String? {
+        guard let value = reference?.trimmed.nilIfEmpty else {
+            return nil
+        }
+
+        if let remoteURL = URL(string: value),
+           let scheme = remoteURL.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            return nil
+        }
+
+        let normalized = URL(fileURLWithPath: value).lastPathComponent
+        guard normalized == value else {
+            return nil
+        }
+
+        return normalized
     }
 }

@@ -27,6 +27,10 @@ struct EntryFormSections: View {
                 Label("插入图片", systemImage: "photo.on.rectangle")
             }
 
+            Text("选图后会自动压缩到 \(EntryImageCompressor.sizeLimitDescription) 以内。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
             imagePreview
         }
     }

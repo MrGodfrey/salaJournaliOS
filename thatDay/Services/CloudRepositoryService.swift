@@ -54,6 +54,7 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         static let zoneName = "thatday-repository"
         static let rootRecordName = "RepositoryRoot"
         static let recordType = "RepositoryRoot"
+        static let sharedDatabaseSubscriptionID = "repository-updates-shared-database"
     }
 
     private let container: CKContainer
@@ -146,12 +147,27 @@ final class CloudRepositoryService: CloudRepositoryServicing {
     }
 
     func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws {
-        guard let zoneID = descriptor.zoneID else {
+        let subscription: CKSubscription
+        let database: CKDatabase
+
+        switch descriptor.role {
+        case .local:
             return
+        case .owner:
+            guard let zoneID = descriptor.zoneID else {
+                return
+            }
+
+            database = privateDatabase
+            subscription = CKRecordZoneSubscription(
+                zoneID: zoneID,
+                subscriptionID: subscriptionID(for: descriptor)
+            )
+        case .editor, .viewer:
+            database = sharedDatabase
+            subscription = CKDatabaseSubscription(subscriptionID: Constant.sharedDatabaseSubscriptionID)
         }
 
-        let database = database(for: descriptor.role)
-        let subscription = CKRecordZoneSubscription(zoneID: zoneID, subscriptionID: subscriptionID(for: descriptor))
         let notificationInfo = CKSubscription.NotificationInfo()
         notificationInfo.shouldSendContentAvailable = true
         subscription.notificationInfo = notificationInfo

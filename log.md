@@ -45,3 +45,38 @@
 ## 2026-04-17 07:56
 
 - 去掉文章卡片所在列表行默认显示的向右箭头，Journal / Blog / Search 三处统一保留完整卡片视觉
+
+## 2026-04-17 14:57
+
+- 补记今天早些时候遗漏到 `log.md` 的改动：
+  - 忽略 Xcode 用户态文件，减少仓库里的无关噪音
+  - 补齐 `App Store / Play Store` 商店素材与 asset metadata
+  - 增加应用展示名、应用分类、非加密声明、相册访问说明，以及 CloudKit / ubiquity 相关 entitlement
+  - 将本地存储从单仓库目录升级为 `preferences.json + repositories.json + repositories/<repository-id>/...` 的多仓库结构
+  - 新增 `RepositoryReference` / `AppPreferences` / `RepositoryLibraryStore` / `RepositoryArchiveService`
+  - 设置页补齐共享仓库更新提醒、Face ID、ZIP 导入导出、默认仓库选择、当前仓库切换与清空当前仓库
+  - 接通远端变更刷新、本地通知点击跳转和共享仓库订阅
+  - 重构文章卡片布局，统一无箭头卡片视觉和信息层次
+- 新增图片插入压缩链路：相册选图后立即压缩，并在保存时再次兜底，保证单张落盘图片控制在 `100KB` 以下
+- 编辑页补充用户提示：明确说明插图会自动压缩到 `100KB` 以内
+- 新增单元测试 `testStoreImageCompressesImportedPhotoBelow100KB`，并同步修正仓库导入导出测试里的图片写入用例
+- 按新的仓库现状重写 `README.md`：
+  - 先写设计方式，再写需求完成情况
+  - 单独补全用户接口、架构层、已知边界、运行与测试
+  - 明确写入“每次功能改动后都要检查 `log.md` 和 `README.md` 是否同步更新”
+- 完整执行测试并通过：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+  - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_14-54-43-+0800.xcresult`
+
+## 2026-04-17 15:15
+
+- 修复共享仓库通知订阅：共享所有者继续使用 `CKRecordZoneSubscription`，共享成员改用 `CKDatabaseSubscription`，避免在 shared database 上开启 zone subscription 时触发 `Subscription evaluation type not allowed in shared database`
+- Journal 和 Blog 页面新增下拉刷新，手动下拉会立即拉取共享仓库最新快照
+- 明确应用启动和每次回到前台时都会自动刷新共享仓库，并复用同一条刷新链路
+- 修复共享仓库图片缺失：共享快照现在会携带文章引用到的本地图片，其他设备拉取后会自动恢复到本地 `images/` 缓存
+- 新增单元测试：
+  - `testManualRefreshUpdatesSharedRepositoryAndMaterializesImages`
+  - `testSavingSharedRepositoryUploadsEmbeddedImagesToCloud`
+- 完整执行测试并通过：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+  - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-12-44-+0800.xcresult`

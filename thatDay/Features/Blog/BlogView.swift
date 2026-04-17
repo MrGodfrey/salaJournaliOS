@@ -50,6 +50,9 @@ struct BlogView: View {
                     )
                 }
             }
+            .refreshable {
+                await store.refreshSharedRepositories(trigger: .manual)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

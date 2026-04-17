@@ -85,6 +85,7 @@ enum SharedRepositoryRefreshTrigger: Sendable {
     case launch
     case foreground
     case push
+    case manual
 }
 
 @MainActor
@@ -486,7 +487,11 @@ final class AppStore {
         defer { isBusy = false }
 
         do {
-            let snapshot = RepositorySnapshot(entries: entries, updatedAt: now())
+            let snapshot = try currentRepositoryStore.makeSnapshot(
+                entries: entries,
+                updatedAt: now(),
+                embeddingImages: true
+            )
             repositoryDescriptor = try await cloudService.saveSnapshot(snapshot, using: repositoryDescriptor)
             try currentRepositoryStore.saveDescriptor(repositoryDescriptor)
             upsertRepositoryReference(
@@ -813,7 +818,7 @@ final class AppStore {
         let repositoryID = accepted.descriptor.storageIdentifier
         let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
         try repositoryStore.saveDescriptor(accepted.descriptor)
-        try repositoryStore.saveSnapshot(accepted.snapshot)
+        try repositoryStore.saveCloudSnapshot(accepted.snapshot)
 
         upsertRepositoryReference(
             repositoryID: repositoryID,
@@ -863,7 +868,7 @@ final class AppStore {
         if repositoryDescriptor.isCloudBacked {
             let snapshot = try await cloudService.loadSnapshot(using: repositoryDescriptor)
             entries = snapshot.entries
-            try repositoryStore.saveSnapshot(snapshot)
+            try repositoryStore.saveCloudSnapshot(snapshot)
             upsertRepositoryReference(
                 repositoryID: currentRepositoryID,
                 descriptor: repositoryDescriptor,
@@ -881,7 +886,12 @@ final class AppStore {
         try currentRepositoryStore.saveSnapshot(snapshot)
 
         if repositoryDescriptor.role != .local {
-            repositoryDescriptor = try await cloudService.saveSnapshot(snapshot, using: repositoryDescriptor)
+            let cloudSnapshot = try currentRepositoryStore.makeSnapshot(
+                entries: entries,
+                updatedAt: snapshot.updatedAt,
+                embeddingImages: true
+            )
+            repositoryDescriptor = try await cloudService.saveSnapshot(cloudSnapshot, using: repositoryDescriptor)
             try currentRepositoryStore.saveDescriptor(repositoryDescriptor)
         } else {
             try currentRepositoryStore.saveDescriptor(.local)
@@ -940,7 +950,16 @@ final class AppStore {
             return
         }
 
+        var ensuredSharedDatabaseSubscription = false
+
         for reference in repositories where reference.descriptor.isCloudBacked {
+            if reference.descriptor.role == .editor || reference.descriptor.role == .viewer {
+                guard !ensuredSharedDatabaseSubscription else {
+                    continue
+                }
+                ensuredSharedDatabaseSubscription = true
+            }
+
             do {
                 try await cloudService.ensureRepositorySubscription(using: reference.descriptor)
             } catch {
@@ -959,7 +978,7 @@ final class AppStore {
         let shouldNotify = previousUpdatedAt != nil && remoteSnapshot.updatedAt > (previousUpdatedAt ?? .distantPast)
 
         try repositoryStore.saveDescriptor(reference.descriptor)
-        try repositoryStore.saveSnapshot(remoteSnapshot)
+        try repositoryStore.saveCloudSnapshot(remoteSnapshot)
 
         upsertRepositoryReference(
             repositoryID: reference.id,
@@ -977,6 +996,7 @@ final class AppStore {
 
         guard shouldNotify,
               preferences.isSharedUpdateNotificationEnabled,
+              trigger != .manual,
               let notification = makeSharedRepositoryNotification(
                 for: reference,
                 previousEntries: previousSnapshot?.entries ?? [],

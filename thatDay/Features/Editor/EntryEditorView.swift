@@ -57,11 +57,7 @@ struct EntryEditorView: View {
                 }
             }
             .task(id: selectedPhoto) {
-                guard let selectedPhoto else {
-                    return
-                }
-
-                importedImageData = try? await selectedPhoto.loadTransferable(type: Data.self)
+                await loadSelectedPhoto()
             }
         }
     }
@@ -77,6 +73,25 @@ struct EntryEditorView: View {
         )
         if didSave {
             dismiss()
+        }
+    }
+
+    @MainActor
+    private func loadSelectedPhoto() async {
+        guard let selectedPhoto else {
+            return
+        }
+
+        do {
+            guard let rawData = try await selectedPhoto.loadTransferable(type: Data.self) else {
+                importedImageData = nil
+                return
+            }
+
+            importedImageData = try EntryImageCompressor.compressedData(for: rawData)
+        } catch {
+            importedImageData = nil
+            store.alertMessage = AppStore.userFacingMessage(for: error)
         }
     }
 }
