@@ -288,6 +288,7 @@ Application Support/thatDay/
 - `RepositoryArchiveService` 负责把当前仓库打包成 ZIP，并从 ZIP 恢复仓库
 - 导出包包含 `repository.json`、`descriptor.json` 和 `images/` 文件夹
 - 导入时会保留当前仓库描述信息里的权限语义，并覆盖当前仓库内容
+- 从系统“文件”里选择外部 ZIP 导入时，会先申请并持有该文件的安全作用域读权限，再执行解压，避免选中文件后误报“没有足够权限”
 - `RepositoryLibraryStore` 在加载 catalog 前会先尝试执行旧版单仓库迁移
 
 ### 4.9 关键文件

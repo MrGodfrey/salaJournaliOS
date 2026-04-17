@@ -102,3 +102,15 @@
     - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testCreateBlogPostAppearsInSearch -only-testing:thatDayUITests/thatDayUITests/testCreateEditAndDeleteBlogPost`
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-29-14-+0800.xcresult`
   - `xcodebuild build -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=E86E7D78-27BA-41D7-82F4-FE3AF76FB0DA'` 构建通过，确认 iPad simulator 编译正常
+
+## 2026-04-17 15:36
+
+- 修复 ZIP 导入权限问题：从系统文件选择器拿到外部 ZIP 后，导入链路现在会先 `startAccessingSecurityScopedResource()`，在整个解压过程结束后再释放访问权限，避免真机上误报“没有足够的权限”
+- 为导入失败补充更明确的用户提示：当底层返回 `fileReadNoPermission` 时，统一映射为“无法读取所选 ZIP 文件，请重新选择后再试。”
+- 新增单元测试：
+  - `testImportArchiveStartsAndStopsSecurityScopedAccess`
+  - `testImportArchiveMapsNoPermissionToUserFacingError`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `18/18` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-36-43-+0800.xcresult`

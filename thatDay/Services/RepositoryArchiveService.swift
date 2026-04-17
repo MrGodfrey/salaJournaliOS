@@ -2,11 +2,14 @@ import Foundation
 
 enum RepositoryArchiveError: LocalizedError {
     case invalidArchive
+    case importPermissionDenied
 
     var errorDescription: String? {
         switch self {
         case .invalidArchive:
             "导入的 ZIP 不是 thatDay 导出的有效仓库。"
+        case .importPermissionDenied:
+            "无法读取所选 ZIP 文件，请重新选择后再试。"
         }
     }
 }
@@ -19,6 +22,20 @@ private struct RepositoryArchiveManifest: Codable {
 }
 
 struct RepositoryArchiveService {
+    private let extractArchive: (URL, URL) throws -> Void
+    private let startAccessingSecurityScopedResource: (URL) -> Bool
+    private let stopAccessingSecurityScopedResource: (URL) -> Void
+
+    init(
+        extractArchive: @escaping (URL, URL) throws -> Void = SimpleZipArchive.extract,
+        startAccessingSecurityScopedResource: @escaping (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        stopAccessingSecurityScopedResource: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
+    ) {
+        self.extractArchive = extractArchive
+        self.startAccessingSecurityScopedResource = startAccessingSecurityScopedResource
+        self.stopAccessingSecurityScopedResource = stopAccessingSecurityScopedResource
+    }
+
     func exportArchive(
         from repositoryStore: LocalRepositoryStore,
         repositoryID: String,
@@ -86,7 +103,18 @@ struct RepositoryArchiveService {
         let unzipRoot = fileManager.temporaryDirectory
             .appendingPathComponent("thatDay-import-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: unzipRoot, withIntermediateDirectories: true)
-        try SimpleZipArchive.extract(zipURL: zipURL, to: unzipRoot)
+        let didStartAccessingSecurityScopedResource = startAccessingSecurityScopedResource(zipURL)
+        defer {
+            if didStartAccessingSecurityScopedResource {
+                stopAccessingSecurityScopedResource(zipURL)
+            }
+        }
+
+        do {
+            try extractArchive(zipURL, unzipRoot)
+        } catch let error as CocoaError where error.code == .fileReadNoPermission {
+            throw RepositoryArchiveError.importPermissionDenied
+        }
 
         let repositoryDirectory = try locateRepositoryDirectory(in: unzipRoot)
         let importStore = LocalRepositoryStore(rootURL: repositoryDirectory)

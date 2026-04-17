@@ -550,6 +550,84 @@ final class thatDayTests: XCTestCase {
         XCTAssertNotNil(try destinationStore.exportableFileURLs().first(where: { $0.lastPathComponent.hasSuffix(".jpg") }))
     }
 
+    func testImportArchiveStartsAndStopsSecurityScopedAccess() async throws {
+        let rootURL = makeTempDirectory()
+        let sourceStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("source", isDirectory: true))
+        let destinationStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("destination", isDirectory: true))
+        let selectedArchiveURL = rootURL.appendingPathComponent("picked.zip")
+        let snapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    kind: .journal,
+                    title: "Security Scoped Import",
+                    body: "Archive body",
+                    happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+                )
+            ],
+            updatedAt: fixtureDate("2026-04-16T09:00:00Z")
+        )
+
+        try sourceStore.saveDescriptor(.local)
+        try sourceStore.saveSnapshot(snapshot)
+
+        var didStartAccessing = false
+        var didStopAccessing = false
+        let service = RepositoryArchiveService(
+            extractArchive: { _, unzipRoot in
+                XCTAssertTrue(didStartAccessing)
+                XCTAssertFalse(didStopAccessing)
+
+                let extractedRepositoryURL = unzipRoot.appendingPathComponent("repository", isDirectory: true)
+                try FileManager.default.createDirectory(at: extractedRepositoryURL, withIntermediateDirectories: true)
+
+                for fileURL in try sourceStore.exportableFileURLs() {
+                    let destinationURL = extractedRepositoryURL.appendingPathComponent(fileURL.lastPathComponent)
+                    try FileManager.default.copyItem(at: fileURL, to: destinationURL)
+                }
+            },
+            startAccessingSecurityScopedResource: { url in
+                XCTAssertEqual(url, selectedArchiveURL)
+                didStartAccessing = true
+                return true
+            },
+            stopAccessingSecurityScopedResource: { url in
+                XCTAssertEqual(url, selectedArchiveURL)
+                didStopAccessing = true
+            }
+        )
+
+        let importedSnapshot = try await service.importArchive(
+            from: selectedArchiveURL,
+            into: destinationStore,
+            preserving: .local
+        ) { _, _ in }
+
+        XCTAssertEqual(importedSnapshot.entries.map(\.title), ["Security Scoped Import"])
+        XCTAssertTrue(didStartAccessing)
+        XCTAssertTrue(didStopAccessing)
+    }
+
+    func testImportArchiveMapsNoPermissionToUserFacingError() async throws {
+        let rootURL = makeTempDirectory()
+        let destinationStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("destination", isDirectory: true))
+        let service = RepositoryArchiveService(
+            extractArchive: { _, _ in
+                throw CocoaError(.fileReadNoPermission)
+            }
+        )
+
+        do {
+            _ = try await service.importArchive(
+                from: rootURL.appendingPathComponent("picked.zip"),
+                into: destinationStore,
+                preserving: .local
+            ) { _, _ in }
+            XCTFail("Expected importArchive to throw")
+        } catch let error as RepositoryArchiveError {
+            XCTAssertEqual(error.errorDescription, "无法读取所选 ZIP 文件，请重新选择后再试。")
+        }
+    }
+
     @MainActor
     func testClearingCurrentRepositoryPersistsEmptySnapshot() async throws {
         let storageRoot = makeTempDirectory()
