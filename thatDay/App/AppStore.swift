@@ -1162,6 +1162,10 @@ final class AppStore {
     }
 
     static func userFacingMessage(for error: Error) -> String {
+        if let cloudKitSchemaMessage = cloudKitProductionSchemaMessage(for: error) {
+            return cloudKitSchemaMessage
+        }
+
         if let localizedError = error as? LocalizedError,
            let description = localizedError.errorDescription?.trimmed.nilIfEmpty {
             return description
@@ -1173,6 +1177,68 @@ final class AppStore {
         }
 
         return "发生了未预期的错误。"
+    }
+
+    private static func cloudKitProductionSchemaMessage(for error: Error) -> String? {
+        guard let recordType = cloudKitProductionSchemaRecordType(in: error) else {
+            return nil
+        }
+
+        return "CloudKit 生产环境还没有部署记录类型 \(recordType)。请先在 CloudKit Console 的 Deploy Schema Changes 中把 development schema 发布到 production，然后再重新生成邀请链接。"
+    }
+
+    private static func cloudKitProductionSchemaRecordType(in error: Error) -> String? {
+        cloudKitErrorMessages(in: error)
+            .lazy
+            .compactMap(productionSchemaRecordType(from:))
+            .first
+    }
+
+    private static func cloudKitErrorMessages(in error: Error) -> [String] {
+        var messages: [String] = []
+
+        func append(_ message: String?) {
+            guard let trimmed = message?.trimmed.nilIfEmpty,
+                  !messages.contains(trimmed) else {
+                return
+            }
+
+            messages.append(trimmed)
+        }
+
+        func collect(from error: Error) {
+            let nsError = error as NSError
+            append(error.localizedDescription)
+            append(nsError.userInfo[NSLocalizedDescriptionKey] as? String)
+            append(nsError.userInfo[NSLocalizedFailureReasonErrorKey] as? String)
+            append(nsError.userInfo[NSDebugDescriptionErrorKey] as? String)
+
+            if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                collect(from: underlyingError)
+            }
+
+            if nsError.domain == CKErrorDomain,
+               let partialErrors = nsError.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: Error] {
+                for partialError in partialErrors.values {
+                    collect(from: partialError)
+                }
+            }
+        }
+
+        collect(from: error)
+        return messages
+    }
+
+    private static func productionSchemaRecordType(from message: String) -> String? {
+        let marker = "Cannot create new type "
+        let suffix = " in production schema"
+
+        guard let start = message.range(of: marker),
+              let end = message.range(of: suffix, range: start.upperBound..<message.endIndex) else {
+            return nil
+        }
+
+        return String(message[start.upperBound..<end.lowerBound]).trimmed.nilIfEmpty
     }
 
     private func invalidateImageViews() {

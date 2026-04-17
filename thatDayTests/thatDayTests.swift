@@ -182,6 +182,47 @@ final class thatDayTests: XCTestCase {
     }
 
     @MainActor
+    func testUserFacingMessageMapsCloudKitProductionSchemaError() {
+        let error = NSError(
+            domain: CKErrorDomain,
+            code: CKError.Code.serverRejectedRequest.rawValue,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Error saving record <CKRecordID: 0x1; recordName=RepositoryRoot, zonelD=thatday-repository:_defaultOwner_> to server: Cannot create new type RepositoryRoot in production schema"
+            ]
+        )
+
+        XCTAssertEqual(
+            AppStore.userFacingMessage(for: error),
+            "CloudKit 生产环境还没有部署记录类型 RepositoryRoot。请先在 CloudKit Console 的 Deploy Schema Changes 中把 development schema 发布到 production，然后再重新生成邀请链接。"
+        )
+    }
+
+    @MainActor
+    func testUserFacingMessageMapsNestedCloudKitProductionSchemaError() {
+        let itemError = NSError(
+            domain: CKErrorDomain,
+            code: CKError.Code.serverRejectedRequest.rawValue,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Error saving record <CKRecordID: 0x1; recordName=RepositoryRoot, zonelD=thatday-repository:_defaultOwner_> to server: Cannot create new type RepositoryRoot in production schema"
+            ]
+        )
+        let zoneID = CKRecordZone.ID(zoneName: "thatday-repository", ownerName: CKCurrentUserDefaultName)
+        let recordID = CKRecord.ID(recordName: "RepositoryRoot", zoneID: zoneID)
+        let error = NSError(
+            domain: CKErrorDomain,
+            code: CKError.Code.partialFailure.rawValue,
+            userInfo: [
+                CKPartialErrorsByItemIDKey: [recordID: itemError]
+            ]
+        )
+
+        XCTAssertEqual(
+            AppStore.userFacingMessage(for: error),
+            "CloudKit 生产环境还没有部署记录类型 RepositoryRoot。请先在 CloudKit Console 的 Deploy Schema Changes 中把 development schema 发布到 production，然后再重新生成邀请链接。"
+        )
+    }
+
+    @MainActor
     func testBiometricLockAuthenticatesOnLaunchAndOnlyReauthenticatesAfterBackground() async throws {
         let storageRoot = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)

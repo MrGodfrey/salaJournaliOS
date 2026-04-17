@@ -101,6 +101,7 @@
 - 导入 ZIP 会覆盖当前仓库内容，不是增量合并
 - 插入图片统一转成 JPEG 并压到 `100KB` 以下；如果原图有透明区域，最终会以白底保存
 - CloudKit 共享、订阅和分享链接接受，依赖设备登录 iCloud 且容器配置正确
+- 首次把共享能力带到 TestFlight / App Store 对应的 CloudKit production 环境时，必须先把 development schema 部署到 production；当前项目至少需要 `RepositoryRoot` 记录类型，否则生成邀请时会报 `Cannot create new type RepositoryRoot in production schema`
 - 仓库根目录里虽然保留了 `lumina/` 前端原型目录，但当前 iOS App 的正式实现不依赖它
 
 ## 3. 用户接口
@@ -263,6 +264,7 @@ Application Support/thatDay/
 这部分现在是完整链路，不再只是“能生成分享链接”：
 
 - `CloudRepositoryService` 负责把整仓库快照保存到 CloudKit 的 `CKRecordZone`
+- 云端快照当前固定落在该 zone 里的 `RepositoryRoot` 记录，字段包括 `updatedAt`、`entryCount` 和 `payload`
 - `thatDayApp.swift` 负责接住 scene/app 生命周期、远端推送和共享接受事件
 - `AppEventBridge.swift` 里的 `RepositoryRemoteChangeCenter` / `NotificationRouteCenter` 负责把系统事件桥接回 `AppStore`
 - `AppStore` 负责在前台刷新共享仓库、比对快照差异、生成本地通知和应用角标，以及在点击通知后切换到对应仓库和文章

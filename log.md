@@ -118,6 +118,12 @@
 ## 2026-04-17 15:47
 
 - 修复导入后当前设备看不到本地图片的问题：仓库内 `file://` 图片现在统一改为直接用 `UIImage(contentsOfFile:)` 从沙盒文件读取，避免导入过程中同一路径文件被覆盖后，当前设备继续沿用 `AsyncImage` 的失败态
+
+## 2026-04-17 16:59
+
+- 把 CloudKit 生产 schema 缺失错误翻译成明确提示：当服务端返回 `Cannot create new type RepositoryRoot in production schema` 时，界面会直接提示先部署 production schema，再重新生成邀请链接
+- 新增单元测试，覆盖直接错误和 `partialFailure` 嵌套错误两条 CloudKit 生产 schema 提示映射路径
+- README 补充 CloudKit production schema 部署前置条件，并明确当前共享快照使用的 `RepositoryRoot` 记录类型与字段
 - 调整图片展示入口：
   - 文章卡片封面
   - 文章详情页头图
@@ -163,3 +169,18 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
     - 单元测试 `20/20` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-43-41-+0800.xcresult`
+
+## 2026-04-17 17:03
+
+- 追加记录本次 CloudKit 生产环境修复说明：
+  - 把 `Cannot create new type RepositoryRoot in production schema` 翻译成明确提示，直接引导先部署 production schema 再重试邀请
+  - 新增单元测试覆盖直接错误和 `partialFailure` 嵌套错误两条提示映射路径
+  - README 补充 CloudKit production schema 前置条件，并明确共享快照使用的 `RepositoryRoot` 记录类型与字段
+
+## 2026-04-17 17:02
+
+- 收口本次修复细节：
+  - 保持 `AppStore` 的 `@MainActor` 隔离不变，仅把新加的 CloudKit 提示映射测试标记为 `@MainActor`
+  - 重新执行定向单元测试并通过：
+    - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testUserFacingMessageMapsCloudKitProductionSchemaError -only-testing:thatDayTests/thatDayTests/testUserFacingMessageMapsNestedCloudKitProductionSchemaError`
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_17-01-46-+0800.xcresult`
