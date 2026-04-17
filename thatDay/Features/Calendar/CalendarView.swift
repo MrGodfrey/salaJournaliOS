@@ -11,13 +11,12 @@ struct CalendarView: View {
 
     @State private var isShowingMonthPicker = false
     @State private var pickerSelection = CalendarPickerSelection(year: 2026, month: 4)
+    @State private var calendarGridWidth: CGFloat = 0
+    @State private var firstWeekdayLabelWidth: CGFloat = 0
 
     private let weekdaySymbols = AppLanguage.shortStandaloneWeekdaySymbols
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
     private let statisticsColumns = Array(repeating: GridItem(.flexible(), spacing: 16), count: 3)
-    private let tagStatisticColumns = [
-        GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 16, alignment: .leading)
-    ]
     private let calendar = AppLanguage.calendar
 
     private var displayedYear: Int {
@@ -34,6 +33,15 @@ struct CalendarView: View {
 
     private var yearRange: [Int] {
         Array(1900...2100)
+    }
+
+    private var monthTitleLeadingInset: CGFloat {
+        guard calendarGridWidth > 0, firstWeekdayLabelWidth > 0 else {
+            return 0
+        }
+
+        let columnWidth = calendarGridWidth / CGFloat(columns.count)
+        return max((columnWidth - firstWeekdayLabelWidth) / 2, 0)
     }
 
     private var blogTagStatistics: [BlogTagStatisticItem] {
@@ -172,6 +180,7 @@ struct CalendarView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .padding(.leading, monthTitleLeadingInset)
                 .accessibilityIdentifier("calendarMonthPickerButton")
 
                 Spacer()
@@ -203,19 +212,29 @@ struct CalendarView: View {
                 }
             }
 
-            LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(weekdaySymbols, id: \.self) { symbol in
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { index, symbol in
                     Text(symbol.uppercased())
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
+                        .background {
+                            if index == 0 {
+                                GeometryReader { proxy in
+                                    Color.clear.preference(
+                                        key: CalendarWeekdayLabelWidthPreferenceKey.self,
+                                        value: proxy.size.width
+                                    )
+                                }
+                            }
+                        }
                 }
 
                 ForEach(days) { day in
                     Button {
                         store.goToJournal(for: day.date)
                     } label: {
-                        VStack(spacing: 6) {
+                        VStack(spacing: 4) {
                             ZStack {
                                 Circle()
                                     .fill(day.isSelected ? Color.indigo.opacity(0.18) : Color.clear)
@@ -230,18 +249,28 @@ struct CalendarView: View {
                                 .fill(day.hasJournalEntries ? Color.indigo : Color.clear)
                                 .frame(width: 6, height: 6)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 38)
-                        .padding(.vertical, 2)
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .padding(.vertical, 1)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("calendarDay-\(day.key)")
                 }
             }
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: CalendarGridWidthPreferenceKey.self,
+                        value: proxy.size.width
+                    )
+                }
+            }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 20)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 18)
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .shadow(color: Color.black.opacity(0.06), radius: 18, y: 8)
+        .onPreferenceChange(CalendarGridWidthPreferenceKey.self) { calendarGridWidth = $0 }
+        .onPreferenceChange(CalendarWeekdayLabelWidthPreferenceKey.self) { firstWeekdayLabelWidth = $0 }
     }
 
     private var blogTagSection: some View {
@@ -250,7 +279,7 @@ struct CalendarView: View {
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.primary)
 
-            LazyVGrid(columns: tagStatisticColumns, alignment: .leading, spacing: 16) {
+            TagStatisticFlowLayout(horizontalSpacing: 12, verticalSpacing: 12) {
                 ForEach(blogTagStatistics) { statistic in
                     Button {
                         store.openBlog(tag: statistic.tag)
@@ -284,7 +313,7 @@ private struct StatisticCard: View {
     let colors: [Color]
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             Text(title)
                 .font(.caption.weight(.bold))
                 .tracking(1.5)
@@ -302,9 +331,9 @@ private struct StatisticCard: View {
                 .foregroundStyle(.white.opacity(0.88))
         }
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 138)
+        .frame(minHeight: 112)
         .padding(.horizontal, 10)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .background(
             LinearGradient(
                 colors: colors,
@@ -321,7 +350,7 @@ private struct BlogTagStatisticButton: View {
     let statistic: BlogTagStatisticItem
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             Text(statistic.tag)
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
                 .lineLimit(1)
@@ -336,9 +365,8 @@ private struct BlogTagStatisticButton: View {
                 .monospacedDigit()
         }
         .foregroundStyle(statistic.style.foreground)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(statistic.style.fill)
@@ -348,6 +376,120 @@ private struct BlogTagStatisticButton: View {
                 .stroke(statistic.style.stroke, lineWidth: 1)
         )
         .shadow(color: statistic.style.shadow, radius: 12, y: 6)
+    }
+}
+
+private struct TagStatisticFlowLayout: Layout {
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+
+    init(horizontalSpacing: CGFloat = 12, verticalSpacing: CGFloat = 12) {
+        self.horizontalSpacing = horizontalSpacing
+        self.verticalSpacing = verticalSpacing
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        let rows = makeRows(maxWidth: maxWidth, subviews: subviews)
+        let width = proposal.width ?? rows.map(\.width).max() ?? 0
+        let height = rows.reduce(0) { partialResult, row in
+            partialResult + row.height
+        } + (rows.isEmpty ? 0 : CGFloat(rows.count - 1) * verticalSpacing)
+
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let rows = makeRows(maxWidth: bounds.width, subviews: subviews)
+        var currentY = bounds.minY
+
+        for row in rows {
+            var currentX = bounds.minX
+
+            for item in row.items {
+                subviews[item.index].place(
+                    at: CGPoint(x: currentX, y: currentY),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: item.size.width, height: item.size.height)
+                )
+                currentX += item.size.width + horizontalSpacing
+            }
+
+            currentY += row.height + verticalSpacing
+        }
+    }
+
+    private func makeRows(maxWidth: CGFloat, subviews: Subviews) -> [FlowRow] {
+        guard !subviews.isEmpty else {
+            return []
+        }
+
+        let availableWidth = max(maxWidth, 0)
+        var rows: [FlowRow] = []
+        var currentRow = FlowRow()
+
+        for index in subviews.indices {
+            let idealSize = subviews[index].sizeThatFits(.unspecified)
+            let fittedWidth = availableWidth.isFinite ? min(idealSize.width, availableWidth) : idealSize.width
+            let fittedSize = subviews[index].sizeThatFits(
+                ProposedViewSize(width: fittedWidth, height: nil)
+            )
+            let needsWrap = !currentRow.items.isEmpty
+                && currentRow.width + horizontalSpacing + fittedSize.width > availableWidth
+
+            if needsWrap {
+                rows.append(currentRow)
+                currentRow = FlowRow()
+            }
+
+            currentRow.items.append(FlowRowItem(index: index, size: fittedSize))
+            currentRow.width += currentRow.items.count == 1
+                ? fittedSize.width
+                : horizontalSpacing + fittedSize.width
+            currentRow.height = max(currentRow.height, fittedSize.height)
+        }
+
+        if !currentRow.items.isEmpty {
+            rows.append(currentRow)
+        }
+
+        return rows
+    }
+}
+
+private struct FlowRow {
+    var items: [FlowRowItem] = []
+    var width: CGFloat = 0
+    var height: CGFloat = 0
+}
+
+private struct FlowRowItem {
+    let index: Int
+    let size: CGSize
+}
+
+private struct CalendarGridWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct CalendarWeekdayLabelWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

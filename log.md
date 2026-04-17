@@ -317,3 +317,35 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testDeletingBlogTagReassignsEntriesAndPersists -only-testing:thatDayTests/thatDayTests/testMovingBlogTagRelativeToAnotherTagPersists -only-testing:thatDayUITests/thatDayUITests/testSettingsSheetOpensFromJournal`
     - 定向测试 `3/3` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-34-10-+0800.xcresult`
+
+## 2026-04-17 18:42
+
+- 调整 Calendar 布局细节：
+  - 继续收紧月历卡片横向内边距，让日期数字更贴近卡片边缘
+  - 月份标题左边缘改为和下方星期列首项对齐
+  - 三张统计卡片压缩上下留白，减少无效垂直空间
+  - 标签统计改成按内容宽度自适应并自动换行，不再使用固定宽度列
+- `README.md` 已同步更新：
+  - 补充 Calendar 月份标题对齐、统计卡片留白和标签宽度规则
+- 新增 / 更新测试：
+  - 新增 UI 测试 `testCalendarTagStatisticsUseContentWidth`
+- 验证记录：
+  - `xcodebuild build -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324'`
+    - 构建通过
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testCalendarMonthPickerAndTodayReturnToCurrentMonth -only-testing:thatDayUITests/thatDayUITests/testCalendarTagStatisticOpensBlogWithMatchingFilter -only-testing:thatDayUITests/thatDayUITests/testCalendarTagStatisticsUseContentWidth`
+    - 测试 bundle 在模拟器内加载失败，错误为 `Trying to load an unsigned library`
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-42-03-+0800.xcresult`
+
+## 2026-04-17 18:48
+
+- 修复 Settings 页 Blog 标签排序交互：
+  - 标签列表改为使用系统原生重排，长按拖起后其余标签会实时让位，放手后立即完成排序并持久化到当前仓库
+  - 标签行补充稳定的可访问性标识，便于 UI 测试直接定位并执行拖拽
+- `README.md` 已同步更新：
+  - 补充 Blog 标签长按拖动时会实时让位、放手后完成排序
+- 新增 / 更新测试：
+  - 新增 UI 测试 `testSettingsBlogTagsReorderWithLongPressDrag`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testMovingBlogTagRelativeToAnotherTagPersists -only-testing:thatDayUITests/thatDayUITests/testSettingsSheetOpensFromJournal -only-testing:thatDayUITests/thatDayUITests/testSettingsBlogTagsReorderWithLongPressDrag`
+    - 定向测试 `3/3` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-47-59-+0800.xcresult`

@@ -11,7 +11,6 @@ struct SettingsView: View {
     @State private var isShowingClearRepositoryConfirmation = false
     @State private var newBlogTagName = ""
     @State private var pendingBlogTagDeletion: BlogTagDeletionRequest?
-    @State private var dropTargetBlogTag: String?
 
     var body: some View {
         NavigationStack {
@@ -40,11 +39,6 @@ struct SettingsView: View {
                 Section("Blog Tags") {
                     ForEach(store.blogTags, id: \.self) { tag in
                         blogTagRow(for: tag)
-                            .listRowBackground(
-                                dropTargetBlogTag == tag
-                                    ? Color(.secondarySystemGroupedBackground)
-                                    : Color.clear
-                            )
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if store.canEditRepository && store.blogTags.count > 1 {
                                     Button {
@@ -56,6 +50,7 @@ struct SettingsView: View {
                                 }
                             }
                     }
+                    .onMove(perform: moveBlogTags)
 
                     if store.canEditRepository {
                         HStack(spacing: 12) {
@@ -310,18 +305,11 @@ struct SettingsView: View {
             }
         }
         .contentShape(Rectangle())
+        .moveDisabled(!store.canEditRepository)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(blogTagRowAccessibilityIdentifier(for: tag))
 
-        if store.canEditRepository {
-            row
-                .draggable(tag)
-                .dropDestination(for: String.self) { items, location in
-                    handleBlogTagDrop(items, onto: tag, location: location)
-                } isTargeted: { isTargeted in
-                    dropTargetBlogTag = isTargeted ? tag : nil
-                }
-        } else {
-            row
-        }
+        row
     }
 
     private func prepareBlogTagDeletion(_ tag: String) {
@@ -332,23 +320,14 @@ struct SettingsView: View {
         )
     }
 
-    private func handleBlogTagDrop(_ items: [String], onto targetTag: String, location: CGPoint) -> Bool {
-        dropTargetBlogTag = nil
-
-        guard let sourceTag = items.first,
-              sourceTag != targetTag else {
-            return false
+    private func moveBlogTags(from source: IndexSet, to destination: Int) {
+        guard store.canEditRepository else {
+            return
         }
 
-        let placeAfter = location.y > 28
         Task {
-            await store.moveBlogTag(
-                named: sourceTag,
-                relativeTo: targetTag,
-                placingAfter: placeAfter
-            )
+            await store.moveBlogTags(fromOffsets: source, toOffset: destination)
         }
-        return true
     }
 
     private func confirmBlogTagDeletion(_ tag: String, replacementTag: String?) {
@@ -403,4 +382,8 @@ private struct ActivityViewController: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+private func blogTagRowAccessibilityIdentifier(for tag: String) -> String {
+    "settingsBlogTagRow-\(tag.replacingOccurrences(of: " ", with: "-"))"
 }

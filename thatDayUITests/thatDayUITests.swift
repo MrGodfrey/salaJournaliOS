@@ -197,6 +197,29 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testCalendarTagStatisticsUseContentWidth() throws {
+        let app = launchApp { storageRoot in
+            try self.seedTaggedBlogRepository(at: storageRoot)
+        }
+
+        app.tabBars.buttons["Calendar"].tap()
+
+        let readingStatistic = app.buttons["calendarBlogTagStat-Reading"]
+        let tripStatistic = app.buttons["calendarBlogTagStat-Trip"]
+
+        if !readingStatistic.waitForExistence(timeout: 1) {
+            app.swipeUp()
+        }
+        if !readingStatistic.waitForExistence(timeout: 1) {
+            app.swipeUp()
+        }
+
+        XCTAssertTrue(readingStatistic.waitForExistence(timeout: 5))
+        XCTAssertTrue(tripStatistic.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(readingStatistic.frame.width, tripStatistic.frame.width + 20)
+    }
+
+    @MainActor
     func testNoImageBlogDetailUsesLeadingInsetLayout() throws {
         let app = launchApp()
 
@@ -242,6 +265,39 @@ final class thatDayUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Current Repository"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["currentRepositoryPicker"].exists)
         XCTAssertTrue(app.staticTexts["Blog Tags"].exists)
+    }
+
+    @MainActor
+    func testSettingsBlogTagsReorderWithLongPressDrag() throws {
+        let app = launchApp { storageRoot in
+            try self.seedTaggedBlogRepository(at: storageRoot)
+        }
+
+        XCTAssertTrue(app.buttons["openSettingsButton"].waitForExistence(timeout: 5))
+        app.buttons["openSettingsButton"].tap()
+
+        let readingRow = app.descendants(matching: .any)["settingsBlogTagRow-Reading"]
+        let tripRow = app.descendants(matching: .any)["settingsBlogTagRow-Trip"]
+        XCTAssertTrue(readingRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(tripRow.waitForExistence(timeout: 5))
+
+        tripRow.press(forDuration: 1.2, thenDragTo: readingRow)
+
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            tripRow.frame.minY < readingRow.frame.minY
+        })
+
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["openSettingsButton"].waitForExistence(timeout: 5))
+        app.buttons["openSettingsButton"].tap()
+
+        let persistedReadingRow = app.descendants(matching: .any)["settingsBlogTagRow-Reading"]
+        let persistedTripRow = app.descendants(matching: .any)["settingsBlogTagRow-Trip"]
+        XCTAssertTrue(persistedReadingRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(persistedTripRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            persistedTripRow.frame.minY < persistedReadingRow.frame.minY
+        })
     }
 
     @MainActor
@@ -391,5 +447,18 @@ final class thatDayUITests: XCTestCase {
             app.swipeUp()
             attempts += 1
         }
+    }
+
+    private func waitUntil(timeout: TimeInterval, condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+
+        return condition()
     }
 }
