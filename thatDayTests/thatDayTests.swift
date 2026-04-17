@@ -1,4 +1,5 @@
 import CloudKit
+import SwiftUI
 import UIKit
 import XCTest
 @testable import thatDay
@@ -154,6 +155,66 @@ final class thatDayTests: XCTestCase {
 
         XCTAssertLessThanOrEqual(savedData.count, EntryImageCompressor.maximumByteCount)
         XCTAssertEqual(savedURL.pathExtension.lowercased(), "jpg")
+    }
+
+    func testImageURLNormalizesLegacyLocalReferencesAndSkipsMissingFiles() throws {
+        let rootURL = makeTempDirectory()
+        let store = LocalRepositoryStore(rootURL: rootURL)
+        let imageData = try XCTUnwrap(makePreviewImageData())
+        let reference = try store.storeImage(data: imageData, suggestedID: UUID())
+        let fileURLReference = store.imagesURL.appendingPathComponent(reference).absoluteString
+        let absolutePathReference = store.imagesURL.appendingPathComponent(reference).path
+
+        XCTAssertEqual(store.imageURL(for: reference)?.lastPathComponent, reference)
+        XCTAssertEqual(store.imageURL(for: fileURLReference)?.lastPathComponent, reference)
+        XCTAssertEqual(store.imageURL(for: absolutePathReference)?.lastPathComponent, reference)
+        XCTAssertNil(store.imageURL(for: "missing.jpg"))
+        XCTAssertNil(store.imageURL(for: store.imagesURL.appendingPathComponent("missing.jpg").absoluteString))
+    }
+
+    @MainActor
+    func testBiometricLockAuthenticatesOnLaunchAndOnlyReauthenticatesAfterBackground() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let now = fixtureDate("2026-04-16T09:00:00Z")
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [makeEntry(title: "Protected Entry", happenedAt: now)],
+                updatedAt: now
+            )
+        )
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: RepositoryReference.localRepositoryID,
+                isBiometricLockEnabled: true,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let biometricAuthenticator = MockBiometricAuthenticator()
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: MockCloudRepositoryService(),
+            now: { now },
+            authenticateBiometrics: biometricAuthenticator.authenticate
+        )
+
+        await store.loadIfNeeded()
+        XCTAssertEqual(biometricAuthenticator.reasons, ["打开 thatDay 需要验证"])
+        XCTAssertFalse(store.isAuthenticationRequired)
+
+        await store.handleScenePhaseChange(.active)
+        XCTAssertEqual(biometricAuthenticator.reasons.count, 1)
+        XCTAssertFalse(store.isAuthenticationRequired)
+
+        await store.handleScenePhaseChange(.background)
+        XCTAssertTrue(store.isAuthenticationRequired)
+
+        await store.handleScenePhaseChange(.active)
+        XCTAssertEqual(biometricAuthenticator.reasons, ["打开 thatDay 需要验证", "打开 thatDay 需要验证"])
+        XCTAssertFalse(store.isAuthenticationRequired)
     }
 
     @MainActor
@@ -642,5 +703,13 @@ private final class MockCloudRepositoryService: CloudRepositoryServicing {
 
     func acceptShare(metadata: CKShare.Metadata) async throws -> AcceptedSharedRepository {
         try await acceptShare(from: URL(string: "https://www.icloud.com/share/mock-share")!)
+    }
+}
+
+private final class MockBiometricAuthenticator {
+    private(set) var reasons: [String] = []
+
+    func authenticate(reason: String) async throws {
+        reasons.append(reason)
     }
 }

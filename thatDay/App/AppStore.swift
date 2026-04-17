@@ -95,10 +95,12 @@ final class AppStore {
     private let cloudService: any CloudRepositoryServicing
     private let repositoryArchiveService = RepositoryArchiveService()
     private let now: () -> Date
+    private let authenticateBiometricsAction: (String) async throws -> Void
     private let calendar: Calendar
 
     private var didLoad = false
     private var preferences = AppPreferences()
+    private var shouldRequireAuthenticationOnNextActive = false
 
     var selectedTab: AppTab = .journal
     var selectedDate: Date
@@ -126,12 +128,14 @@ final class AppStore {
         libraryStore: RepositoryLibraryStore,
         cloudService: any CloudRepositoryServicing,
         calendar: Calendar = .current,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        authenticateBiometrics: @escaping (String) async throws -> Void = AppStore.systemAuthenticateBiometrics
     ) {
         self.libraryStore = libraryStore
         self.cloudService = cloudService
         self.calendar = calendar
         self.now = now
+        authenticateBiometricsAction = authenticateBiometrics
 
         let initialDate = calendar.startOfDay(for: now())
         selectedDate = initialDate
@@ -290,6 +294,7 @@ final class AppStore {
             await refreshSharedRepositories(trigger: .launch)
             if preferences.isBiometricLockEnabled {
                 isAuthenticationRequired = true
+                shouldRequireAuthenticationOnNextActive = false
                 await unlockIfNeeded()
             }
         } catch {
@@ -591,17 +596,20 @@ final class AppStore {
         if !isEnabled {
             setBiometricLockEnabled(false)
             isAuthenticationRequired = false
+            shouldRequireAuthenticationOnNextActive = false
             return
         }
 
         do {
-            try await authenticateBiometrics(reason: "启用 Face ID 保护")
+            try await authenticateBiometricsAction("启用生物识别保护")
             setBiometricLockEnabled(true)
             isAuthenticationRequired = false
+            shouldRequireAuthenticationOnNextActive = false
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
             setBiometricLockEnabled(false)
             isAuthenticationRequired = false
+            shouldRequireAuthenticationOnNextActive = false
         }
     }
 
@@ -774,17 +782,30 @@ final class AppStore {
     }
 
     func handleScenePhaseChange(_ phase: ScenePhase) async {
-        guard phase == .active else {
-            return
-        }
-
         guard preferences.isBiometricLockEnabled else {
             isAuthenticationRequired = false
+            shouldRequireAuthenticationOnNextActive = false
             return
         }
 
-        isAuthenticationRequired = true
-        await unlockIfNeeded()
+        switch phase {
+        case .background:
+            guard !isAuthenticating else {
+                return
+            }
+
+            shouldRequireAuthenticationOnNextActive = true
+            isAuthenticationRequired = true
+        case .active:
+            guard shouldRequireAuthenticationOnNextActive else {
+                return
+            }
+
+            isAuthenticationRequired = true
+            await unlockIfNeeded()
+        default:
+            return
+        }
     }
 
     func unlockIfNeeded() async {
@@ -798,8 +819,9 @@ final class AppStore {
         defer { isAuthenticating = false }
 
         do {
-            try await authenticateBiometrics(reason: "打开 thatDay 需要验证")
+            try await authenticateBiometricsAction("打开 thatDay 需要验证")
             isAuthenticationRequired = false
+            shouldRequireAuthenticationOnNextActive = false
         } catch {
             if let authError = error as? LAError,
                authError.code == .userCancel || authError.code == .systemCancel {
@@ -1074,7 +1096,7 @@ final class AppStore {
         try? await UNUserNotificationCenter.current().add(request)
     }
 
-    private func authenticateBiometrics(reason: String) async throws {
+    private static func systemAuthenticateBiometrics(reason: String) async throws {
         let context = LAContext()
         context.localizedFallbackTitle = "使用密码"
 

@@ -10,6 +10,8 @@
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>选择书籍封面需要访问相册。</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>启用生物识别解锁需要使用 Face ID 验证。</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

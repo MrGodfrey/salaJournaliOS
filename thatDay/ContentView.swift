@@ -95,12 +95,12 @@ private struct AppLockOverlay: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 20) {
-                Image(systemName: "faceid")
+                Image(systemName: "lock.shield.fill")
                     .font(.system(size: 44, weight: .semibold))
                     .foregroundStyle(.primary)
 
                 VStack(spacing: 8) {
-                    Text("Face ID 已开启")
+                    Text("生物识别保护已开启")
                         .font(.title3.bold())
 
                     Text("验证后才能查看当前仓库内容。")

@@ -80,3 +80,25 @@
 - 完整执行测试并通过：
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
   - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-12-44-+0800.xcresult`
+
+## 2026-04-17 15:31
+
+- 修复生物识别兼容性：
+  - `Info.plist` 补齐 `NSFaceIDUsageDescription`，避免在支持 Face ID 的设备上打开生物识别开关时直接闪退
+  - 设置页和锁屏层文案统一改为“生物识别解锁 / 生物识别保护”，不再把 Touch ID 设备误写成 Face ID
+  - `AppStore` 的前台认证状态机改为只在真正从后台回到前台后再触发验证，避免 Touch ID 弹窗本身引起 `.active` 回调时进入重复认证死循环
+- 加固本地图像引用解析：
+  - 兼容旧的绝对路径 / `file://` 图片引用，统一回落到仓库内 `images/` 文件名
+  - 如果本地图片文件已经不存在，则不再把失效的 `file://` URL 继续交给 `AsyncImage`
+- 新增单元测试：
+  - `testBiometricLockAuthenticatesOnLaunchAndOnlyReauthenticatesAfterBackground`
+  - `testImageURLNormalizesLegacyLocalReferencesAndSkipsMissingFiles`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+    - 单元测试 `16/16` 通过
+    - UI 测试主体与 Launch Tests 均显示通过，但整轮执行里有两条 UI 用例被 runner 以 `signal kill` 重启，导致命令返回 `65`
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-25-26-+0800.xcresult`
+  - 单独重跑上述两条 UI 用例并通过：
+    - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testCreateBlogPostAppearsInSearch -only-testing:thatDayUITests/thatDayUITests/testCreateEditAndDeleteBlogPost`
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-29-14-+0800.xcresult`
+  - `xcodebuild build -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=E86E7D78-27BA-41D7-82F4-FE3AF76FB0DA'` 构建通过，确认 iPad simulator 编译正常

@@ -77,7 +77,7 @@ struct SettingsView: View {
                 }
 
                 Section("安全") {
-                    Toggle("Face ID 解锁", isOn: Binding(
+                    Toggle("生物识别解锁", isOn: Binding(
                         get: { store.isBiometricLockEnabled },
                         set: { isEnabled in
                             Task {

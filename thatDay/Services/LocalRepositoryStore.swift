@@ -106,7 +106,12 @@ struct LocalRepositoryStore {
             return nil
         }
 
-        return imagesURL.appendingPathComponent(localReference)
+        let fileURL = imagesURL.appendingPathComponent(localReference)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return nil
+        }
+
+        return fileURL
     }
 
     func exportableFileURLs() throws -> [URL] {
@@ -196,17 +201,18 @@ struct LocalRepositoryStore {
             return nil
         }
 
-        if let remoteURL = URL(string: value),
-           let scheme = remoteURL.scheme?.lowercased(),
-           scheme == "http" || scheme == "https" {
-            return nil
+        if let parsedURL = URL(string: value),
+           let scheme = parsedURL.scheme?.lowercased() {
+            switch scheme {
+            case "http", "https":
+                return nil
+            case "file":
+                return parsedURL.lastPathComponent.trimmed.nilIfEmpty
+            default:
+                break
+            }
         }
 
-        let normalized = URL(fileURLWithPath: value).lastPathComponent
-        guard normalized == value else {
-            return nil
-        }
-
-        return normalized
+        return URL(fileURLWithPath: value).lastPathComponent.trimmed.nilIfEmpty
     }
 }
