@@ -9,7 +9,7 @@ struct JournalView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             List {
-                if store.journalSections.isEmpty {
+                if store.journalEntries.isEmpty {
                     ContentUnavailableView(
                         "No journal entries on this day",
                         systemImage: "calendar.badge.exclamationmark",
@@ -20,28 +20,20 @@ struct JournalView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                 } else {
-                    ForEach(store.journalSections) { section in
-                        Section {
-                            ForEach(section.entries) { entry in
-                                NavigationLink(value: EntryDestination.read(entry.id)) {
-                                    EntryCardView(
-                                        entry: entry,
-                                        imageURL: store.imageURL(for: entry),
-                                        imageRefreshVersion: store.imageRefreshVersion
-                                    )
-                                }
-                                .navigationLinkIndicatorVisibility(.hidden)
-                                .buttonStyle(.plain)
-                                .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                            }
-                        } header: {
-                            Text(String(section.year))
-                                .font(.title2.bold())
-                                .textCase(nil)
-                                .padding(.leading, 4)
+                    ForEach(store.journalEntries) { entry in
+                        NavigationLink(value: EntryDestination.read(entry.id)) {
+                            EntryCardView(
+                                entry: entry,
+                                imageURL: store.imageURL(for: entry),
+                                imageRefreshVersion: store.imageRefreshVersion,
+                                dateText: entry.yearTitle
+                            )
                         }
+                        .navigationLinkIndicatorVisibility(.hidden)
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                     }
                 }
             }

@@ -11,6 +11,7 @@ struct EntryEditorView: View {
     @State private var draft: EntryDraft
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var importedImageData: Data?
+    @State private var isExistingImageRemoved = false
     @State private var isSaving = false
 
     init(store: AppStore, session: EntryEditorSession) {
@@ -33,7 +34,8 @@ struct EntryEditorView: View {
                 EntryFormSections(
                     draft: $draft,
                     selectedPhoto: $selectedPhoto,
-                    importedImageData: importedImageData,
+                    isExistingImageRemoved: $isExistingImageRemoved,
+                    importedImageData: $importedImageData,
                     existingImageURL: session.entry.flatMap { store.imageURL(for: $0) },
                     imageRefreshVersion: store.imageRefreshVersion,
                     blogTags: store.blogTags
@@ -72,6 +74,7 @@ struct EntryEditorView: View {
         let didSave = await store.saveEntry(
             draft: draft,
             importedImageData: importedImageData,
+            removeExistingImage: isExistingImageRemoved,
             editing: session.entry
         )
         if didSave {
@@ -92,6 +95,7 @@ struct EntryEditorView: View {
             }
 
             importedImageData = try EntryImageCompressor.compressedData(for: rawData)
+            isExistingImageRemoved = false
         } catch {
             importedImageData = nil
             store.alertMessage = AppStore.userFacingMessage(for: error)

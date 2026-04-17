@@ -12,13 +12,6 @@ enum AppTab: Hashable {
     case blog
 }
 
-struct JournalSection: Identifiable, Equatable {
-    var id: Int { year }
-
-    let year: Int
-    let entries: [EntryRecord]
-}
-
 enum EntryEditorMode: String, Sendable {
     case create
     case edit
@@ -220,24 +213,14 @@ final class AppStore {
         }
     }
 
-    var journalSections: [JournalSection] {
-        let filtered = entries
+    var journalEntries: [EntryRecord] {
+        entries
             .filter { $0.kind == .journal && calendar.isSameMonthDay($0.happenedAt, selectedDate) }
             .sorted { lhs, rhs in
                 if lhs.happenedAt != rhs.happenedAt {
                     return lhs.happenedAt > rhs.happenedAt
                 }
                 return lhs.createdAt > rhs.createdAt
-            }
-
-        let grouped = Dictionary(grouping: filtered) { entry in
-            calendar.component(.year, from: entry.happenedAt)
-        }
-
-        return grouped.keys
-            .sorted(by: >)
-            .map { year in
-                JournalSection(year: year, entries: grouped[year] ?? [])
             }
     }
 
@@ -369,14 +352,19 @@ final class AppStore {
         editorSession = nil
     }
 
-    func saveEntry(draft: EntryDraft, importedImageData: Data?, editing editingEntry: EntryRecord? = nil) async -> Bool {
+    func saveEntry(
+        draft: EntryDraft,
+        importedImageData: Data?,
+        removeExistingImage: Bool = false,
+        editing editingEntry: EntryRecord? = nil
+    ) async -> Bool {
         guard canEditRepository else {
             alertMessage = "The current repository is read-only and cannot save changes."
             return false
         }
 
         let normalized = draft.normalized
-        guard !normalized.title.isEmpty else {
+        guard normalized.kind == .journal || !normalized.title.isEmpty else {
             alertMessage = "Enter a title."
             return false
         }
@@ -391,15 +379,18 @@ final class AppStore {
         do {
             normalizeRepositoryState()
             let entryID = editingEntry?.id ?? UUID()
-            let didReplaceImage = importedImageData != nil
+            let existingImageReference = editingEntry?.imageReference
+            let didChangeImage = importedImageData != nil || (removeExistingImage && existingImageReference != nil)
             let imageReference: String?
             if let importedImageData {
                 imageReference = try currentRepositoryStore.storeImage(
                     data: importedImageData,
                     suggestedID: entryID
                 )
+            } else if removeExistingImage {
+                imageReference = nil
             } else {
-                imageReference = editingEntry?.imageReference
+                imageReference = existingImageReference
             }
 
             let timestamp = now()
@@ -434,7 +425,7 @@ final class AppStore {
             }
 
             try await persistEntries()
-            if didReplaceImage {
+            if didChangeImage {
                 invalidateImageViews()
             }
             editorSession = nil
@@ -1321,14 +1312,15 @@ final class AppStore {
             return nil
         }
 
+        let previewText = firstEntry.displayTitle ?? firstEntry.summary.trimmed.nilIfEmpty ?? firstEntry.timelineTitle
         let title: String
         let body: String
         if changedEntries.count == 1 {
             title = "\(reference.displayName) updated"
-            body = firstEntry.title
+            body = previewText
         } else {
             title = "\(reference.displayName) has \(changedEntries.count) updates"
-            body = "\(firstEntry.title) and \(changedEntries.count - 1) more entries"
+            body = "\(previewText) and \(changedEntries.count - 1) more entries"
         }
 
         return RepositoryUpdateNotification(

@@ -218,6 +218,27 @@
   - `Journaled Days` 显示 Journal 篇数
   - `Blogs` 显示 Blog 篇数
   - `Written` 统计全部 Journal + Blog 的总字数
+
+## 2026-04-17 22:29
+
+- 调整 Journal 展示：
+  - 去掉年份分组标题，改成直接展示文章卡片
+  - Journal 卡片上的日期改为只显示年份
+  - Journal 标题改为可选，空标题时卡片和详情页不再强行显示占位标题
+- 编辑页补充图片删除能力：
+  - 图片预览下方新增 `Delete Image`
+  - 保存时支持移除已有插图
+  - 仓库快照保存后会自动清理已失去引用的本地图片文件
+- 新增 / 更新测试：
+  - 单元测试新增 `testSavingJournalEntryAllowsEmptyTitle`
+  - 单元测试新增 `testRemovingImageFromEntryClearsReferenceAndDeletesStoredFile`
+  - UI 测试新增 `testCreateJournalEntryWithoutTitle`
+  - 原 `Journal` 跨年分组测试同步改成扁平排序断言
+- `README.md` 已同步更新本次用户可见行为
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+  - 整套测试通过：`thatDayTests 33/33`，`thatDayUITests + LaunchTests 19/19`
+  - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_22-24-20-+0800.xcresult`
   - 字数统计改用 `NLTokenizer` 做分词，缺省回退到按空白 / 标点过滤
 - Blog 补上标签能力：
   - 文章模型新增 `blogTag`
@@ -368,3 +389,24 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testFreshInstallShowsEmptyJournalInsteadOfWelcomeEntry -only-testing:thatDayUITests/thatDayUITests/testSearchRequiresQueryBeforeShowingResults`
     - 定向 UI 测试 `2/2` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_19-05-25-+0800.xcresult`
+
+## 2026-04-17 22:30
+
+- 调整 Journal 展示：
+  - 去掉年份分组标题，改成直接展示文章卡片
+  - Journal 卡片上的日期改为只显示年份
+  - Journal 标题改为可选，空标题时卡片和详情页不再强行显示占位标题
+- 编辑页补充图片删除能力：
+  - 图片预览下方新增 `Delete Image`
+  - 保存时支持移除已有插图
+  - 仓库快照保存后会自动清理已失去引用的本地图片文件
+- 新增 / 更新测试：
+  - 单元测试新增 `testSavingJournalEntryAllowsEmptyTitle`
+  - 单元测试新增 `testRemovingImageFromEntryClearsReferenceAndDeletesStoredFile`
+  - UI 测试新增 `testCreateJournalEntryWithoutTitle`
+  - 原 `Journal` 跨年分组测试同步改成扁平排序断言
+- `README.md` 已同步更新本次用户可见行为
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+  - 整套测试通过：`thatDayTests 33/33`，`thatDayUITests + LaunchTests 19/19`
+  - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_22-24-20-+0800.xcresult`

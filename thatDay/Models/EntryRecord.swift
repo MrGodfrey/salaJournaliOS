@@ -79,6 +79,14 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
         AppLanguage.cardDateTitle(for: happenedAt)
     }
 
+    var yearTitle: String {
+        AppLanguage.yearTitle(for: happenedAt)
+    }
+
+    var displayTitle: String? {
+        title.trimmed.nilIfEmpty
+    }
+
     var searchableText: String {
         [title, body]
             .joined(separator: " ")

@@ -5,15 +5,16 @@ import UIKit
 struct EntryFormSections: View {
     @Binding var draft: EntryDraft
     @Binding var selectedPhoto: PhotosPickerItem?
+    @Binding var isExistingImageRemoved: Bool
+    @Binding var importedImageData: Data?
 
-    let importedImageData: Data?
     let existingImageURL: URL?
     let imageRefreshVersion: Int
     let blogTags: [String]
 
     var body: some View {
         Section("Details") {
-            TextField("Title", text: $draft.title)
+            TextField(titlePlaceholder, text: $draft.title)
                 .accessibilityIdentifier("entryTitleField")
 
             DatePicker("Date", selection: $draft.happenedAt, displayedComponents: [.date])
@@ -45,8 +46,25 @@ struct EntryFormSections: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
-            imagePreview
+            if hasImagePreview {
+                imagePreview
+
+                Button("Delete Image", role: .destructive) {
+                    importedImageData = nil
+                    selectedPhoto = nil
+                    isExistingImageRemoved = true
+                }
+                .accessibilityIdentifier("entryRemoveImageButton")
+            }
         }
+    }
+
+    private var titlePlaceholder: String {
+        draft.kind == .journal ? "Title (Optional)" : "Title"
+    }
+
+    private var hasImagePreview: Bool {
+        importedImageData != nil || (existingImageURL != nil && !isExistingImageRemoved)
     }
 
     @ViewBuilder
@@ -59,7 +77,8 @@ struct EntryFormSections: View {
                 .frame(height: 180)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        } else if let existingImageURL {
+        } else if let existingImageURL,
+                  !isExistingImageRemoved {
             Group {
                 if let image = existingImageURL.repositoryLocalImage {
                     Image(uiImage: image)

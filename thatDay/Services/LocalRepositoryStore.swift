@@ -44,6 +44,7 @@ struct LocalRepositoryStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(snapshot)
         try data.write(to: archiveURL, options: .atomic)
+        try removeUnreferencedImages(referencedBy: snapshot.entries.map(\.imageReference))
     }
 
     func makeSnapshot(
@@ -195,6 +196,29 @@ struct LocalRepositoryStore {
 
             let fileURL = imagesURL.appendingPathComponent(reference)
             try asset.data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    private func removeUnreferencedImages(referencedBy references: [String?]) throws {
+        guard FileManager.default.fileExists(atPath: imagesURL.path) else {
+            return
+        }
+
+        let activeReferences = Set(references.compactMap(normalizedLocalImageReference))
+        let enumerator = FileManager.default.enumerator(
+            at: imagesURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        while let fileURL = enumerator?.nextObject() as? URL {
+            let values = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true,
+                  !activeReferences.contains(fileURL.lastPathComponent) else {
+                continue
+            }
+
+            try FileManager.default.removeItem(at: fileURL)
         }
     }
 

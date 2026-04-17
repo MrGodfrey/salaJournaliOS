@@ -6,7 +6,7 @@ import XCTest
 
 final class thatDayTests: XCTestCase {
     @MainActor
-    func testJournalSectionsGroupEntriesByMonthDayAcrossYears() async throws {
+    func testJournalEntriesFilterByMonthDayAcrossYearsAndStaySorted() async throws {
         let entries = [
             makeEntry(title: "2026", happenedAt: fixtureDate("2026-04-16T09:00:00Z")),
             makeEntry(title: "2025", happenedAt: fixtureDate("2025-04-16T08:00:00Z")),
@@ -21,8 +21,7 @@ final class thatDayTests: XCTestCase {
 
         await store.loadIfNeeded()
 
-        XCTAssertEqual(store.journalSections.map(\.year), [2026, 2025, 2024, 2023])
-        XCTAssertEqual(store.journalSections.first?.entries.first?.title, "2026")
+        XCTAssertEqual(store.journalEntries.map(\.title), ["2026", "2025", "2024", "2023"])
     }
 
     @MainActor
@@ -160,6 +159,27 @@ final class thatDayTests: XCTestCase {
 
         XCTAssertTrue(reloadedStore.blogEntries.contains(where: { $0.title == "A New Persisted Blog" }))
         XCTAssertEqual(reloadedStore.currentRepositoryID, RepositoryReference.localRepositoryID)
+    }
+
+    @MainActor
+    func testSavingJournalEntryAllowsEmptyTitle() async throws {
+        let store = try makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
+
+        await store.loadIfNeeded()
+
+        let didSave = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: "",
+                body: "Saved without a title.",
+                happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+            ),
+            importedImageData: nil
+        )
+
+        XCTAssertTrue(didSave)
+        XCTAssertEqual(store.journalEntries.first?.title, "")
+        XCTAssertEqual(store.journalEntries.first?.body, "Saved without a title.")
     }
 
     @MainActor
@@ -356,6 +376,62 @@ final class thatDayTests: XCTestCase {
         XCTAssertEqual(store.imageURL(for: absolutePathReference)?.lastPathComponent, reference)
         XCTAssertNil(store.imageURL(for: "missing.jpg"))
         XCTAssertNil(store.imageURL(for: store.imagesURL.appendingPathComponent("missing.jpg").absoluteString))
+    }
+
+    @MainActor
+    func testRemovingImageFromEntryClearsReferenceAndDeletesStoredFile() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let happenedAt = fixtureDate("2026-04-16T09:00:00Z")
+        let entryID = UUID()
+        let imageReference = try localStore.storeImage(
+            data: try XCTUnwrap(makePreviewImageData()),
+            suggestedID: entryID
+        )
+        let entry = EntryRecord(
+            id: entryID,
+            kind: .journal,
+            title: "With Image",
+            body: "Body",
+            happenedAt: happenedAt,
+            createdAt: happenedAt,
+            updatedAt: happenedAt,
+            imageReference: imageReference
+        )
+
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(RepositorySnapshot(entries: [entry], updatedAt: happenedAt))
+
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: MockCloudRepositoryService(),
+            now: { happenedAt }
+        )
+        await store.loadIfNeeded()
+
+        let initialEntry = try XCTUnwrap(store.entries.first)
+        let initialImageURL = try XCTUnwrap(store.imageURL(for: initialEntry))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: initialImageURL.path))
+
+        let didSave = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: initialEntry.title,
+                body: initialEntry.body,
+                happenedAt: initialEntry.happenedAt
+            ),
+            importedImageData: nil,
+            removeExistingImage: true,
+            editing: initialEntry
+        )
+
+        XCTAssertTrue(didSave)
+
+        let updatedEntry = try XCTUnwrap(store.entries.first)
+        XCTAssertNil(updatedEntry.imageReference)
+        XCTAssertNil(store.imageURL(for: updatedEntry))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: initialImageURL.path))
     }
 
     func testRepositoryLocalImageLoadsFileURLAndSkipsRemoteURL() throws {

@@ -13,6 +13,7 @@ struct EntryDetailView: View {
     @State private var draft: EntryDraft
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var importedImageData: Data?
+    @State private var isExistingImageRemoved = false
     @State private var isSaving = false
     @State private var isShowingDeleteConfirmation = false
 
@@ -98,7 +99,8 @@ struct EntryDetailView: View {
                 EntryFormSections(
                     draft: $draft,
                     selectedPhoto: $selectedPhoto,
-                    importedImageData: importedImageData,
+                    isExistingImageRemoved: $isExistingImageRemoved,
+                    importedImageData: $importedImageData,
                     existingImageURL: store.imageURL(for: entry),
                     imageRefreshVersion: store.imageRefreshVersion,
                     blogTags: store.blogTags
@@ -117,14 +119,16 @@ struct EntryDetailView: View {
                     readerCover(for: entry)
 
                     VStack(alignment: .leading, spacing: 16) {
-                        Text(entry.title)
-                            .font(.largeTitle.bold())
-                            .foregroundStyle(.primary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("entryDetailTitle")
+                        if let title = entry.displayTitle {
+                            Text(title)
+                                .font(.largeTitle.bold())
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("entryDetailTitle")
+                        }
 
                         HStack(spacing: 8) {
-                            Text(entry.cardDateTitle)
+                            Text(entry.timelineTitle)
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
 
@@ -200,6 +204,7 @@ struct EntryDetailView: View {
         )
         importedImageData = nil
         selectedPhoto = nil
+        isExistingImageRemoved = false
         isEditing = true
     }
 
@@ -216,6 +221,7 @@ struct EntryDetailView: View {
 
         importedImageData = nil
         selectedPhoto = nil
+        isExistingImageRemoved = false
         isEditing = false
     }
 
@@ -230,12 +236,14 @@ struct EntryDetailView: View {
         let didSave = await store.saveEntry(
             draft: draft,
             importedImageData: importedImageData,
+            removeExistingImage: isExistingImageRemoved,
             editing: entry
         )
 
         if didSave {
             importedImageData = nil
             selectedPhoto = nil
+            isExistingImageRemoved = false
             isEditing = false
         }
     }
@@ -262,6 +270,7 @@ struct EntryDetailView: View {
             }
 
             importedImageData = try EntryImageCompressor.compressedData(for: rawData)
+            isExistingImageRemoved = false
         } catch {
             importedImageData = nil
             store.alertMessage = AppStore.userFacingMessage(for: error)

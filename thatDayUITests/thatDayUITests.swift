@@ -82,6 +82,27 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testCreateJournalEntryWithoutTitle() throws {
+        let app = launchApp()
+
+        XCTAssertTrue(app.buttons["addJournalEntryButton"].waitForExistence(timeout: 5))
+        app.buttons["addJournalEntryButton"].tap()
+
+        let titleField = app.textFields["entryTitleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        XCTAssertEqual(titleField.placeholderValue, "Title (Optional)")
+
+        let bodyEditor = app.textViews.element(boundBy: 0)
+        XCTAssertTrue(bodyEditor.waitForExistence(timeout: 5))
+        bodyEditor.tap()
+        bodyEditor.typeText("Saved without a title.")
+
+        app.buttons["saveEntryButton"].tap()
+
+        XCTAssertTrue(app.staticTexts["Saved without a title."].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testCreateEditAndDeleteBlogPost() throws {
         let app = launchApp()
 

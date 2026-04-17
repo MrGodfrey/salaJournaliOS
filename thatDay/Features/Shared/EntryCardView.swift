@@ -5,6 +5,19 @@ struct EntryCardView: View {
     let entry: EntryRecord
     let imageURL: URL?
     let imageRefreshVersion: Int
+    let dateText: String?
+
+    init(
+        entry: EntryRecord,
+        imageURL: URL?,
+        imageRefreshVersion: Int,
+        dateText: String? = nil
+    ) {
+        self.entry = entry
+        self.imageURL = imageURL
+        self.imageRefreshVersion = imageRefreshVersion
+        self.dateText = dateText
+    }
 
     var body: some View {
         Group {
@@ -31,10 +44,12 @@ struct EntryCardView: View {
 
     private var cardText: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(entry.title)
-                .font(.headline)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
+            if let title = entry.displayTitle {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
 
             Text(entry.summary)
                 .font(.subheadline)
@@ -42,7 +57,7 @@ struct EntryCardView: View {
                 .lineLimit(3)
 
             HStack(spacing: 8) {
-                Text(entry.cardDateTitle)
+                Text(dateText ?? entry.cardDateTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
