@@ -5,29 +5,18 @@ struct EntryCardView: View {
     let imageURL: URL?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(entry.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                Text(entry.summary)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-
-                Text(entry.cardDateTitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
+        Group {
             if let imageURL {
-                thumbnail(for: imageURL)
+                VStack(alignment: .leading, spacing: 0) {
+                    coverImage(for: imageURL)
+                    cardText
+                        .padding(16)
+                }
+            } else {
+                cardText
+                    .padding(16)
             }
         }
-        .padding(16)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
@@ -37,13 +26,31 @@ struct EntryCardView: View {
         .accessibilityIdentifier("entryCard-\(entry.id.uuidString)")
     }
 
+    private var cardText: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(entry.title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Text(entry.summary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+
+            Text(entry.cardDateTitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     @ViewBuilder
-    private func thumbnail(for imageURL: URL) -> some View {
+    private func coverImage(for imageURL: URL) -> some View {
         AsyncImage(url: imageURL) { phase in
             switch phase {
             case .empty:
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(.tertiarySystemGroupedBackground))
+                Color(.tertiarySystemGroupedBackground)
                     .overlay {
                         ProgressView()
                     }
@@ -52,12 +59,13 @@ struct EntryCardView: View {
                     .resizable()
                     .scaledToFill()
             case .failure:
-                EmptyView()
+                Color(.tertiarySystemGroupedBackground)
             @unknown default:
-                EmptyView()
+                Color(.tertiarySystemGroupedBackground)
             }
         }
-        .frame(width: 92, height: 92)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .frame(maxWidth: .infinity)
+        .frame(height: 204)
+        .clipped()
     }
 }
