@@ -166,7 +166,7 @@ final class thatDayUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Reading Summary"].waitForExistence(timeout: 5))
 
-        let tripFilter = app.buttons["Trip"].firstMatch
+        let tripFilter = app.buttons["blogTagFilter-Trip"]
         XCTAssertTrue(tripFilter.waitForExistence(timeout: 5))
         tripFilter.tap()
 

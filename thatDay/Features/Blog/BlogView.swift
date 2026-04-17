@@ -1,6 +1,5 @@
 import Observation
 import SwiftUI
-import UIKit
 
 struct BlogView: View {
     @Bindable var store: AppStore
@@ -128,113 +127,99 @@ struct BlogView: View {
     }
 }
 
-private struct BlogTagFilterControl: UIViewRepresentable {
+private struct BlogTagFilterControl: View {
     let tags: [String]
     @Binding var selection: String?
 
-    private var options: [String] {
-        ["All"] + tags
+    private var options: [BlogTagFilterOption] {
+        [.all] + tags.map(BlogTagFilterOption.tag)
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    func makeUIView(context: Context) -> UIScrollView {
-        let scrollView = UIScrollView()
-        scrollView.showsHorizontalScrollIndicator = false
-        scrollView.backgroundColor = .clear
-        scrollView.accessibilityIdentifier = "blogTagFilterControl"
-
-        let segmentedControl = UISegmentedControl(items: options)
-        segmentedControl.apportionsSegmentWidthsByContent = true
-        segmentedControl.selectedSegmentTintColor = UIColor(Color.indigo)
-        segmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
-        segmentedControl.addTarget(context.coordinator, action: #selector(Coordinator.selectionChanged(_:)), for: .valueChanged)
-        segmentedControl.translatesAutoresizingMaskIntoConstraints = false
-        segmentedControl.accessibilityIdentifier = "blogTagFilterSegments"
-
-        scrollView.addSubview(segmentedControl)
-        NSLayoutConstraint.activate([
-            segmentedControl.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-            segmentedControl.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-            segmentedControl.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            segmentedControl.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-            segmentedControl.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor)
-        ])
-
-        context.coordinator.scrollView = scrollView
-        context.coordinator.segmentedControl = segmentedControl
-        update(segmentedControl: segmentedControl, coordinator: context.coordinator)
-        return scrollView
-    }
-
-    func updateUIView(_ scrollView: UIScrollView, context: Context) {
-        guard let segmentedControl = context.coordinator.segmentedControl else {
-            return
-        }
-
-        context.coordinator.parent = self
-        update(segmentedControl: segmentedControl, coordinator: context.coordinator)
-    }
-
-    private func update(segmentedControl: UISegmentedControl, coordinator: Coordinator) {
-        if coordinator.options != options {
-            segmentedControl.removeAllSegments()
-            for (index, title) in options.enumerated() {
-                segmentedControl.insertSegment(withTitle: title, at: index, animated: false)
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(spacing: 10) {
+                    ForEach(options) { option in
+                        Button {
+                            selection = option.tag
+                        } label: {
+                            Text(option.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(isSelected(option) ? Color.white : Color.primary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(isSelected(option) ? Color.indigo : Color(.secondarySystemGroupedBackground))
+                                )
+                                .overlay {
+                                    if !isSelected(option) {
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                                    }
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .id(option.id)
+                        .accessibilityIdentifier("blogTagFilter-\(option.accessibilityID)")
+                    }
+                }
+                .padding(.vertical, 2)
             }
-            coordinator.options = options
+            .scrollIndicators(.hidden)
+            .accessibilityIdentifier("blogTagFilterControl")
+            .onAppear {
+                scrollToSelection(using: proxy, animated: false)
+            }
+            .onChange(of: selection) { _, _ in
+                scrollToSelection(using: proxy, animated: true)
+            }
+            .onChange(of: tags) { _, _ in
+                scrollToSelection(using: proxy, animated: false)
+            }
         }
-
-        let selectedIndex = selection.flatMap { tag in
-            options.firstIndex(of: tag)
-        } ?? 0
-
-        segmentedControl.selectedSegmentIndex = selectedIndex
-        coordinator.scrollSelectedSegmentIfNeeded()
     }
 
-    final class Coordinator: NSObject {
-        var parent: BlogTagFilterControl
-        weak var scrollView: UIScrollView?
-        weak var segmentedControl: UISegmentedControl?
-        var options: [String] = []
+    private func isSelected(_ option: BlogTagFilterOption) -> Bool {
+        selection == option.tag
+    }
 
-        init(parent: BlogTagFilterControl) {
-            self.parent = parent
-        }
+    private func scrollToSelection(using proxy: ScrollViewProxy, animated: Bool) {
+        let selectedID = options.first(where: isSelected)?.id ?? BlogTagFilterOption.all.id
 
-        @objc
-        func selectionChanged(_ sender: UISegmentedControl) {
-            let selectedIndex = sender.selectedSegmentIndex
-            if selectedIndex <= 0 {
-                parent.selection = nil
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    proxy.scrollTo(selectedID, anchor: .center)
+                }
             } else {
-                parent.selection = options[selectedIndex]
+                proxy.scrollTo(selectedID, anchor: .center)
             }
-
-            scrollSelectedSegmentIfNeeded()
         }
+    }
+}
 
-        func scrollSelectedSegmentIfNeeded() {
-            guard let scrollView,
-                  let segmentedControl,
-                  segmentedControl.selectedSegmentIndex >= 0,
-                  segmentedControl.numberOfSegments > segmentedControl.selectedSegmentIndex else {
-                return
-            }
+private struct BlogTagFilterOption: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let tag: String?
+    let accessibilityID: String
 
-            let orderedSegments = segmentedControl.subviews.sorted { lhs, rhs in
-                lhs.frame.minX < rhs.frame.minX
-            }
-            guard orderedSegments.count > segmentedControl.selectedSegmentIndex else {
-                return
-            }
+    nonisolated static let all = BlogTagFilterOption(
+        id: "all",
+        title: "All",
+        tag: nil,
+        accessibilityID: "All"
+    )
 
-            let selectedFrame = orderedSegments[segmentedControl.selectedSegmentIndex].frame
-            let targetFrame = selectedFrame.insetBy(dx: -24, dy: 0)
-            scrollView.scrollRectToVisible(targetFrame, animated: true)
-        }
+    nonisolated static func tag(_ value: String) -> BlogTagFilterOption {
+        BlogTagFilterOption(
+            id: value,
+            title: value,
+            tag: value,
+            accessibilityID: value
+        )
     }
 }

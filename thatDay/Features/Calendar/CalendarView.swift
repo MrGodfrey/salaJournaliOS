@@ -140,18 +140,22 @@ struct CalendarView: View {
     }
 
     private func calendarPanel(days: [CalendarDay]) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .center, spacing: 16) {
                 Button {
                     presentMonthPicker()
                 } label: {
                     HStack(spacing: 8) {
                         Text(displayedMonthTitle)
-                            .font(.system(size: 30, weight: .bold))
+                            .font(.system(size: 22, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .allowsTightening(true)
+                            .layoutPriority(1)
 
                         Image(systemName: "chevron.right")
-                            .font(.headline.weight(.bold))
+                            .font(.subheadline.weight(.bold))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -187,7 +191,7 @@ struct CalendarView: View {
                 }
             }
 
-            LazyVGrid(columns: columns, spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 10) {
                 ForEach(weekdaySymbols, id: \.self) { symbol in
                     Text(symbol.uppercased())
                         .font(.footnote.weight(.semibold))
@@ -203,7 +207,7 @@ struct CalendarView: View {
                             ZStack {
                                 Circle()
                                     .fill(day.isSelected ? Color.indigo.opacity(0.18) : Color.clear)
-                                    .frame(width: 34, height: 34)
+                                    .frame(width: 32, height: 32)
 
                                 Text("\(day.dayNumber)")
                                     .font(.body.weight(day.isSelected ? .bold : .medium))
@@ -214,15 +218,16 @@ struct CalendarView: View {
                                 .fill(day.hasJournalEntries ? Color.indigo : Color.clear)
                                 .frame(width: 6, height: 6)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 42)
-                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, minHeight: 38)
+                        .padding(.vertical, 2)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("calendarDay-\(day.key)")
                 }
             }
         }
-        .padding(24)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 20)
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .shadow(color: Color.black.opacity(0.06), radius: 18, y: 8)
     }

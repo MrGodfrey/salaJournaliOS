@@ -246,3 +246,21 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests`
     - UI 测试 `14/14` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_17-56-15-+0800.xcresult`
+
+## 2026-04-17 18:12
+
+- 收紧 Calendar 页面视觉：
+  - 月份年份标题改成单行显示，字号下调到只略大于日期数字，避免在窄屏上换行
+  - 月历卡片内部间距进一步收紧，让内容更贴近卡片边框
+- 修复 Blog 顶部标签筛选条布局 bug：
+  - 移除原先基于 `UISegmentedControl` 的实现，避免筛选条被错误拉成巨大圆形
+  - 改成 SwiftUI 原生的横向可滚动圆角矩形标签条
+  - 标签过多时支持左右滑动，英文标签保持完整显示，不再被截断
+- 更新 UI 测试：
+  - `testBlogTagFilterShowsOnlyMatchingPosts` 改为使用新的标签条可访问性标识
+- 验证记录：
+  - `xcodebuild build -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324'`
+    - 构建通过
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testCalendarMonthPickerAndTodayReturnToCurrentMonth -only-testing:thatDayUITests/thatDayUITests/testBlogTagFilterShowsOnlyMatchingPosts`
+    - UI 测试 `2/2` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-10-59-+0800.xcresult`
