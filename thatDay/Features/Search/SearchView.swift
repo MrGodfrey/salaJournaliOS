@@ -14,7 +14,7 @@ struct SearchView: View {
         NavigationStack(path: $navigationPath) {
             List {
                 Section {
-                    TextField("搜索标题或正文", text: $store.searchText)
+                    TextField("Search titles or content", text: $store.searchText)
                         .textInputAutocapitalization(.never)
                         .accessibilityIdentifier("searchField")
                 }
@@ -42,14 +42,14 @@ struct SearchView: View {
                             }
                         }
                     } header: {
-                        Text("共 \(store.searchResults.count) 条结果")
+                        Text("\(store.searchResults.count) Results")
                     }
                 } else {
                     Section {
                         ContentUnavailableView(
-                            "输入关键词开始搜索",
+                            "Start typing to search",
                             systemImage: "magnifyingglass",
-                            description: Text("Journal 和 Blog 会一起参与检索。")
+                            description: Text("Journal and Blog entries are searched together.")
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 24)
@@ -68,7 +68,7 @@ struct SearchView: View {
                     )
                 } else {
                     ContentUnavailableView(
-                        "这篇文章已经不存在",
+                        "This entry no longer exists",
                         systemImage: "doc.text.magnifyingglass"
                     )
                 }

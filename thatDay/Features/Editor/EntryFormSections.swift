@@ -11,24 +11,24 @@ struct EntryFormSections: View {
     let imageRefreshVersion: Int
 
     var body: some View {
-        Section("信息") {
-            TextField("标题", text: $draft.title)
+        Section("Details") {
+            TextField("Title", text: $draft.title)
                 .accessibilityIdentifier("entryTitleField")
 
-            DatePicker("日期", selection: $draft.happenedAt, displayedComponents: [.date])
+            DatePicker("Date", selection: $draft.happenedAt, displayedComponents: [.date])
                 .accessibilityIdentifier("entryDatePicker")
         }
 
-        Section("正文") {
+        Section("Content") {
             TextEditor(text: $draft.body)
                 .frame(minHeight: 220)
                 .accessibilityIdentifier("entryBodyEditor")
 
             PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                Label("插入图片", systemImage: "photo.on.rectangle")
+                Label("Add Image", systemImage: "photo.on.rectangle")
             }
 
-            Text("选图后会自动压缩到 \(EntryImageCompressor.sizeLimitDescription) 以内。")
+            Text("Selected images are automatically compressed below \(EntryImageCompressor.sizeLimitDescription).")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 

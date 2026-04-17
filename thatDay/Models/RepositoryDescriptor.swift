@@ -10,13 +10,13 @@ enum RepositoryRole: String, Codable, Sendable {
     var title: String {
         switch self {
         case .local:
-            "本地仓库"
+            "Local Repository"
         case .owner:
-            "共享所有者"
+            "Shared Owner"
         case .editor:
-            "共享成员（可编辑）"
+            "Shared Member (Can Edit)"
         case .viewer:
-            "共享成员（只读）"
+            "Shared Member (Read-Only)"
         }
     }
 
@@ -39,18 +39,18 @@ enum ShareAccessOption: String, CaseIterable, Codable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .viewOnly:
-            "仅查看"
+            "View Only"
         case .editable:
-            "允许编辑"
+            "Can Edit"
         }
     }
 
     var description: String {
         switch self {
         case .viewOnly:
-            "邀请对象只能查看当前仓库。"
+            "Invitees can only view this repository."
         case .editable:
-            "邀请对象可以查看并修改当前仓库。"
+            "Invitees can view and edit this repository."
         }
     }
 }
@@ -106,15 +106,15 @@ struct RepositoryDescriptor: Codable, Hashable, Sendable {
 
     var defaultDisplayName: String {
         guard isCloudBacked else {
-            return "我的仓库"
+            return "My Repository"
         }
 
         guard let ownerName = zoneOwnerName?.trimmed.nilIfEmpty,
               ownerName != CKCurrentUserDefaultName,
               ownerName != "_defaultOwner_" else {
-            return "共享仓库"
+            return "Shared Repository"
         }
 
-        return "共享仓库 · \(ownerName)"
+        return "Shared Repository · \(ownerName)"
     }
 }

@@ -184,3 +184,26 @@
   - 重新执行定向单元测试并通过：
     - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testUserFacingMessageMapsCloudKitProductionSchemaError -only-testing:thatDayTests/thatDayTests/testUserFacingMessageMapsNestedCloudKitProductionSchemaError`
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_17-01-46-+0800.xcresult`
+
+## 2026-04-17 17:34
+
+- 完成一轮 UI 英文化收口：
+  - SwiftUI 页面、空态、按钮、弹窗、错误提示、CloudKit 共享提示、导入导出提示、示例文章文案全部改为英文
+  - `Info.plist` 里的相册 / Face ID 权限说明改为英文
+  - App 显示名改为 `thatDay`
+- 应用语言偏好切到英文：
+  - 根视图注入英文 `Locale`
+  - 日期标题、月份、星期和卡片日期统一走英文格式化
+- 只读仓库交互收紧：
+  - `Journal` 和 `Blog` 在 `canEditRepository == false` 时不再渲染右下角新增按钮，而不是仅做禁用
+- `README.md` 已同步更新：
+  - 补充 UI 默认英文
+  - 补充只读仓库不显示 `Journal / Blog` 新建按钮
+- 新增 / 更新测试：
+  - 更新单元测试中的英文提示断言
+  - 更新 UI 测试中的英文文案断言
+  - 新增 UI 测试 `testReadOnlyRepositoryHidesCreateButtonsInJournalAndBlog`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+  - 整套测试通过：`thatDayTests 25/25`，`thatDayUITests 13/13`
+  - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_17-31-57-+0800.xcresult`

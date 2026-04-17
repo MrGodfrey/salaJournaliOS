@@ -6,19 +6,19 @@ enum SampleData {
             EntryRecord(
                 id: UUID(uuidString: "A0B79942-8340-4CE0-A406-CB0D335FD061")!,
                 kind: .journal,
-                title: "欢迎使用 thatDay",
+                title: "Welcome to thatDay",
                 body: """
-                1. 在 Journal 页面左右滑动，可以快速切换前一天和后一天；点击顶部日期，随时回到今天。
+                1. In Journal, use the Previous and Next buttons to move between days, and tap the date in the title to jump back to today.
 
-                2. 点左上角日历进入 Calendar。年份和月份都可以点开，用滚轮快速跳到想看的年月；右上角 NOW 会直接回到今天。
+                2. Tap the calendar button in the top-left corner to open Calendar. Year and month both open wheel pickers, and NOW jumps back to today.
 
-                3. 右下角蓝色加号用来新建内容。打开文章后，先是阅读模式；点右上角“编辑”再进入修改，保存、取消和删除都在里面。
+                3. The blue plus button in the lower-right corner creates new content. Open any entry to read it first, then tap Edit in the top-right corner to update it.
 
-                4. 在文章卡片上向左滑，可以直接看到“编辑”和“删除”操作。删除前会再次确认。
+                4. In read-only shared repositories, create actions are hidden and editing is unavailable.
 
-                5. Search 会同时搜索 Journal 和 Blog；Blog 里的内容只会留在 Blog 和 Search，不会进入 Journal。
+                5. Search looks through both Journal and Blog. Blog entries stay in Blog and Search, and do not appear in Journal or Calendar.
 
-                6. 图片请直接从相册选择，不再需要图片链接。
+                6. Pick images directly from Photos. Image URLs are no longer needed.
                 """,
                 happenedAt: fixtureDate("2026-04-16T09:00:00Z"),
                 createdAt: fixtureDate("2026-04-16T09:00:00Z"),

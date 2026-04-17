@@ -44,9 +44,9 @@ enum RepositoryTransferKind: String, Sendable {
     var title: String {
         switch self {
         case .export:
-            "导出"
+            "Exporting"
         case .import:
-            "导入"
+            "Importing"
         }
     }
 }
@@ -65,7 +65,7 @@ struct RepositoryTransferProgress: Equatable, Sendable {
     }
 
     var statusText: String {
-        "共 \(totalFiles) 个文件，已\(kind.title) \(completedFiles) 个"
+        "\(kind.title) \(completedFiles) of \(totalFiles) files"
     }
 }
 
@@ -196,14 +196,14 @@ final class AppStore {
 
     var repositorySummary: String {
         if repositoryDescriptor.role == .local {
-            return "当前正在使用自己的本地仓库。"
+            return "You are currently using your local repository."
         }
 
-        return "当前仓库为 \(currentRepositoryName)，权限为 \(repositoryDescriptor.role.title)。"
+        return "Current repository: \(currentRepositoryName). Access: \(repositoryDescriptor.role.title)."
     }
 
     var selectedDateTitle: String {
-        selectedDate.formatted(.dateTime.month(.wide).day())
+        AppLanguage.monthDayTitle(for: selectedDate)
     }
 
     var currentRepositoryReference: RepositoryReference? {
@@ -322,7 +322,7 @@ final class AppStore {
 
     func showEditor(for kind: EntryKind, entry: EntryRecord? = nil) {
         guard canEditRepository else {
-            alertMessage = "当前仓库是只读的，不能修改内容。"
+            alertMessage = "The current repository is read-only and cannot be changed."
             return
         }
 
@@ -340,17 +340,17 @@ final class AppStore {
 
     func saveEntry(draft: EntryDraft, importedImageData: Data?, editing editingEntry: EntryRecord? = nil) async -> Bool {
         guard canEditRepository else {
-            alertMessage = "当前仓库是只读的，不能保存内容。"
+            alertMessage = "The current repository is read-only and cannot save changes."
             return false
         }
 
         let normalized = draft.normalized
         guard !normalized.title.isEmpty else {
-            alertMessage = "请输入标题。"
+            alertMessage = "Enter a title."
             return false
         }
         guard !normalized.body.isEmpty else {
-            alertMessage = "请输入正文。"
+            alertMessage = "Enter content."
             return false
         }
 
@@ -410,7 +410,7 @@ final class AppStore {
 
     func deleteEntry(_ entry: EntryRecord) async {
         guard canEditRepository else {
-            alertMessage = "当前仓库是只读的，不能删除内容。"
+            alertMessage = "The current repository is read-only and cannot delete content."
             return
         }
 
@@ -427,7 +427,7 @@ final class AppStore {
 
     func clearCurrentRepository() async {
         guard canEditRepository else {
-            alertMessage = "当前仓库是只读的，不能清空内容。"
+            alertMessage = "The current repository is read-only and cannot be cleared."
             return
         }
 
@@ -498,7 +498,7 @@ final class AppStore {
 
     func presentSharingController() async {
         guard canEditRepository else {
-            alertMessage = "只有可以编辑仓库的用户才能发起共享邀请。"
+            alertMessage = "Only users who can edit the repository can create a share invite."
             return
         }
 
@@ -537,7 +537,7 @@ final class AppStore {
         let rawValue = incomingShareLink.trimmed
         guard let url = URL(string: rawValue),
               url.absoluteString.contains("/share/") else {
-            alertMessage = "请输入有效的 iCloud 共享链接。"
+            alertMessage = "Enter a valid iCloud share link."
             return
         }
 
@@ -615,7 +615,7 @@ final class AppStore {
         }
 
         do {
-            try await authenticateBiometricsAction("启用生物识别保护")
+            try await authenticateBiometricsAction("Enable biometric lock")
             setBiometricLockEnabled(true)
             isAuthenticationRequired = false
             shouldRequireAuthenticationOnNextActive = false
@@ -647,7 +647,7 @@ final class AppStore {
         do {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
             guard granted else {
-                alertMessage = "通知权限未开启，无法接收共享仓库更新提醒。"
+                alertMessage = "Notification permission is disabled, so shared repository updates cannot be delivered."
                 setSharedUpdateNotificationEnabled(false)
                 return
             }
@@ -731,7 +731,7 @@ final class AppStore {
         }
 
         guard canEditRepository else {
-            alertMessage = "当前仓库是只读的，不能导入内容。"
+            alertMessage = "The current repository is read-only and cannot import content."
             return
         }
 
@@ -845,7 +845,7 @@ final class AppStore {
         defer { isAuthenticating = false }
 
         do {
-            try await authenticateBiometricsAction("打开 thatDay 需要验证")
+            try await authenticateBiometricsAction("Unlock thatDay")
             isAuthenticationRequired = false
             shouldRequireAuthenticationOnNextActive = false
         } catch {
@@ -906,7 +906,7 @@ final class AppStore {
             upsertRepositoryReference(
                 repositoryID: currentRepositoryID,
                 descriptor: .local,
-                displayName: "我的仓库",
+                displayName: "My Repository",
                 snapshotUpdatedAt: snapshot.updatedAt,
                 markAsOpened: true
             )
@@ -975,7 +975,7 @@ final class AppStore {
         let existing = repositories.first(where: { $0.id == repositoryID })
         let updatedReference = RepositoryReference(
             id: repositoryID,
-            displayName: source == .local ? "我的仓库" : normalizedName,
+            displayName: source == .local ? "My Repository" : normalizedName,
             descriptor: descriptor,
             source: source,
             lastKnownSnapshotUpdatedAt: snapshotUpdatedAt,
@@ -1096,11 +1096,11 @@ final class AppStore {
         let title: String
         let body: String
         if changedEntries.count == 1 {
-            title = "\(reference.displayName) 有更新"
+            title = "\(reference.displayName) updated"
             body = firstEntry.title
         } else {
-            title = "\(reference.displayName) 有 \(changedEntries.count) 条更新"
-            body = "\(firstEntry.title) 等 \(changedEntries.count) 篇内容"
+            title = "\(reference.displayName) has \(changedEntries.count) updates"
+            body = "\(firstEntry.title) and \(changedEntries.count - 1) more entries"
         }
 
         return RepositoryUpdateNotification(
@@ -1143,7 +1143,7 @@ final class AppStore {
 
     private static func systemAuthenticateBiometrics(reason: String) async throws {
         let context = LAContext()
-        context.localizedFallbackTitle = "使用密码"
+        context.localizedFallbackTitle = "Use Passcode"
 
         var evaluationError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &evaluationError) else {
@@ -1176,7 +1176,7 @@ final class AppStore {
             return localizedDescription
         }
 
-        return "发生了未预期的错误。"
+        return "An unexpected error occurred."
     }
 
     private static func cloudKitProductionSchemaMessage(for error: Error) -> String? {
@@ -1184,7 +1184,7 @@ final class AppStore {
             return nil
         }
 
-        return "CloudKit 生产环境还没有部署记录类型 \(recordType)。请先在 CloudKit Console 的 Deploy Schema Changes 中把 development schema 发布到 production，然后再重新生成邀请链接。"
+        return "The CloudKit production environment has not deployed the \(recordType) record type yet. Deploy the development schema to production in CloudKit Console, then create the share link again."
     }
 
     private static func cloudKitProductionSchemaRecordType(in error: Error) -> String? {
@@ -1286,7 +1286,7 @@ private struct PreviewCloudRepositoryService: CloudRepositoryServicing {
         AcceptedSharedRepository(
             descriptor: RepositoryDescriptor(zoneName: "preview-zone", zoneOwnerName: "_owner_", shareRecordName: "preview-share", role: .viewer),
             snapshot: RepositorySnapshot(entries: SampleData.makeEntries()),
-            displayName: "共享仓库"
+            displayName: "Shared Repository"
         )
     }
 

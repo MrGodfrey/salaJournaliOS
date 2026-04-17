@@ -8,11 +8,11 @@ enum RepositoryArchiveError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidArchive:
-            "导入的 ZIP 不是 thatDay 导出的有效仓库。"
+            "The imported ZIP is not a valid repository exported by thatDay."
         case .importPermissionDenied:
-            "无法读取所选 ZIP 文件，请重新选择后再试。"
+            "The selected ZIP file could not be read. Choose it again and retry."
         case .invalidRepositoryPath:
-            "仓库里的文件路径无效，无法完成导入导出。"
+            "A file path in the repository is invalid, so import or export cannot continue."
         }
     }
 }

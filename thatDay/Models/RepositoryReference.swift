@@ -36,7 +36,7 @@ struct RepositoryReference: Identifiable, Codable, Hashable, Sendable {
 
     static let local = RepositoryReference(
         id: localRepositoryID,
-        displayName: "我的仓库",
+        displayName: "My Repository",
         descriptor: .local,
         source: .local
     )

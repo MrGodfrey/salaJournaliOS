@@ -9,9 +9,9 @@
 	<key>CKSharingSupported</key>
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>选择书籍封面需要访问相册。</string>
+	<string>Photo Library access is required to choose entry images.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>启用生物识别解锁需要使用 Face ID 验证。</string>
+	<string>Face ID is required to use biometric unlock.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

@@ -8,9 +8,9 @@ enum EntryImageCompressionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidImageData:
-            "选中的图片无法识别，请重新选择。"
+            "The selected image could not be recognized. Choose a different image."
         case .unableToSatisfySizeLimit:
-            "这张图片处理后仍无法压缩到 100KB 以下，请换一张图片。"
+            "This image could not be compressed below 100KB. Choose a different image."
         }
     }
 }

@@ -12,7 +12,7 @@ final class thatDayUITests: XCTestCase {
         app.tabBars.buttons["Search"].tap()
 
         XCTAssertTrue(app.textFields["searchField"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["欢迎使用 thatDay"].exists)
+        XCTAssertFalse(app.staticTexts["Welcome to thatDay"].exists)
     }
 
     @MainActor
@@ -117,7 +117,7 @@ final class thatDayUITests: XCTestCase {
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.tap()
 
-        let deleteConfirmation = app.alerts.buttons["删除"]
+        let deleteConfirmation = app.alerts.buttons["Delete"]
         XCTAssertTrue(deleteConfirmation.waitForExistence(timeout: 5))
         deleteConfirmation.tap()
 
@@ -200,15 +200,101 @@ final class thatDayUITests: XCTestCase {
         XCTAssertTrue(app.buttons["acceptShareLinkButton"].waitForExistence(timeout: 5))
     }
 
-    private func launchApp() -> XCUIApplication {
+    @MainActor
+    func testReadOnlyRepositoryHidesCreateButtonsInJournalAndBlog() throws {
+        let app = launchApp { storageRoot in
+            try self.seedReadOnlyRepository(at: storageRoot)
+        }
+
+        XCTAssertTrue(app.buttons["openSettingsButton"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["addJournalEntryButton"].waitForExistence(timeout: 2))
+
+        app.tabBars.buttons["Blog"].tap()
+        XCTAssertFalse(app.buttons["addBlogEntryButton"].waitForExistence(timeout: 2))
+    }
+
+    private func launchApp(prepareStorage: ((URL) throws -> Void)? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         let storageRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("thatDay-ui-\(UUID().uuidString)", isDirectory: true)
 
+        if let prepareStorage {
+            do {
+                try prepareStorage(storageRoot)
+            } catch {
+                XCTFail("Failed to prepare storage: \(error)")
+            }
+        }
+
         app.launchEnvironment["THATDAY_STORAGE_ROOT"] = storageRoot.path
-        app.launchEnvironment["THATDAY_RESET_STORAGE"] = "1"
+        app.launchEnvironment["THATDAY_RESET_STORAGE"] = prepareStorage == nil ? "1" : "0"
         app.launchEnvironment["THATDAY_REFERENCE_DATE"] = "2026-04-16T09:00:00Z"
         app.launch()
         return app
+    }
+
+    private func seedReadOnlyRepository(at storageRoot: URL) throws {
+        let fileManager = FileManager.default
+        let repositoriesRoot = storageRoot.appendingPathComponent("repositories", isDirectory: true)
+        let repositoryID = "read-only-repository"
+        let repositoryRoot = repositoriesRoot.appendingPathComponent(repositoryID, isDirectory: true)
+        let isoDate = "2026-04-16T09:00:00Z"
+
+        try fileManager.createDirectory(at: repositoryRoot, withIntermediateDirectories: true)
+
+        let descriptor: [String: Any] = [
+            "role": "viewer"
+        ]
+        let snapshot: [String: Any] = [
+            "entries": [
+                [
+                    "id": "2B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA0",
+                    "kind": "journal",
+                    "title": "Read-Only Journal",
+                    "body": "This repository should hide create actions.",
+                    "happenedAt": isoDate,
+                    "createdAt": isoDate,
+                    "updatedAt": isoDate
+                ],
+                [
+                    "id": "2B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA1",
+                    "kind": "blog",
+                    "title": "Read-Only Blog",
+                    "body": "Blog creation should also be hidden.",
+                    "happenedAt": isoDate,
+                    "createdAt": isoDate,
+                    "updatedAt": isoDate
+                ]
+            ],
+            "updatedAt": isoDate,
+            "embeddedImages": []
+        ]
+        let catalog: [[String: Any]] = [
+            [
+                "id": repositoryID,
+                "displayName": "Read-Only Repository",
+                "descriptor": descriptor,
+                "source": "shared",
+                "lastKnownSnapshotUpdatedAt": isoDate,
+                "subscribedAt": isoDate
+            ]
+        ]
+        let preferences: [String: Any] = [
+            "defaultRepositoryID": repositoryID,
+            "isBiometricLockEnabled": false,
+            "isSharedUpdateNotificationEnabled": false
+        ]
+
+        try writeJSON(catalog, to: storageRoot.appendingPathComponent("repositories.json"))
+        try writeJSON(preferences, to: storageRoot.appendingPathComponent("preferences.json"))
+        try writeJSON(descriptor, to: repositoryRoot.appendingPathComponent("descriptor.json"))
+        try writeJSON(snapshot, to: repositoryRoot.appendingPathComponent("repository.json"))
+    }
+
+    private func writeJSON(_ value: Any, to url: URL) throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
     }
 }

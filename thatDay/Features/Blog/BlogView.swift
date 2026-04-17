@@ -11,9 +11,9 @@ struct BlogView: View {
             List {
                 if store.blogEntries.isEmpty {
                     ContentUnavailableView(
-                        "还没有 Blog",
+                        "No blog posts yet",
                         systemImage: "square.and.pencil",
-                        description: Text("先写下第一篇 Blog。")
+                        description: Text("Write your first blog post.")
                     )
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -46,7 +46,7 @@ struct BlogView: View {
                     )
                 } else {
                     ContentUnavailableView(
-                        "这篇文章已经不存在",
+                        "This entry no longer exists",
                         systemImage: "doc.text.magnifyingglass"
                     )
                 }
@@ -72,20 +72,21 @@ struct BlogView: View {
                 navigationPath = [destination]
             }
             .overlay(alignment: .bottomTrailing) {
-                Button {
-                    store.showEditor(for: .blog)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 56, height: 56)
-                        .background(Color.indigo, in: Circle())
-                        .shadow(color: Color.black.opacity(0.18), radius: 12, y: 6)
+                if store.canEditRepository {
+                    Button {
+                        store.showEditor(for: .blog)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 56, height: 56)
+                            .background(Color.indigo, in: Circle())
+                            .shadow(color: Color.black.opacity(0.18), radius: 12, y: 6)
+                    }
+                    .padding(.trailing, 24)
+                    .padding(.bottom, 20)
+                    .accessibilityIdentifier("addBlogEntryButton")
                 }
-                .disabled(!store.canEditRepository)
-                .padding(.trailing, 24)
-                .padding(.bottom, 20)
-                .accessibilityIdentifier("addBlogEntryButton")
             }
         }
     }

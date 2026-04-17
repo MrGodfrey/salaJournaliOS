@@ -12,9 +12,9 @@ struct CalendarView: View {
     @State private var isShowingMonthPicker = false
     @State private var pickerSelection = CalendarPickerSelection(year: 2026, month: 4)
 
-    private let weekdaySymbols = Calendar.current.shortStandaloneWeekdaySymbols
+    private let weekdaySymbols = AppLanguage.shortStandaloneWeekdaySymbols
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 7)
-    private let calendar = Calendar.current
+    private let calendar = AppLanguage.calendar
 
     private var displayedYear: Int {
         calendar.component(.year, from: store.displayedMonth)
@@ -25,7 +25,7 @@ struct CalendarView: View {
     }
 
     private var displayedMonthTitle: String {
-        store.displayedMonth.formatted(.dateTime.month(.wide))
+        AppLanguage.monthTitle(for: store.displayedMonth)
     }
 
     private var yearRange: [Int] {
@@ -152,7 +152,7 @@ struct CalendarView: View {
             .sheet(isPresented: $isShowingMonthPicker) {
                 NavigationStack {
                     HStack(spacing: 0) {
-                        Picker("年份", selection: $pickerSelection.year) {
+                        Picker("Year", selection: $pickerSelection.year) {
                             ForEach(yearRange, id: \.self) { year in
                                 Text(String(year)).tag(year)
                             }
@@ -160,25 +160,25 @@ struct CalendarView: View {
                         .pickerStyle(.wheel)
                         .accessibilityIdentifier("calendarYearWheel")
 
-                        Picker("月份", selection: $pickerSelection.month) {
+                        Picker("Month", selection: $pickerSelection.month) {
                             ForEach(1...12, id: \.self) { month in
-                                Text(calendar.monthSymbols[month - 1]).tag(month)
+                                Text(AppLanguage.monthSymbols[month - 1]).tag(month)
                             }
                         }
                         .pickerStyle(.wheel)
                         .accessibilityIdentifier("calendarMonthWheel")
                     }
-                    .navigationTitle("选择年月")
+                    .navigationTitle("Choose Month and Year")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
-                            Button("取消") {
+                            Button("Cancel") {
                                 isShowingMonthPicker = false
                             }
                         }
 
                         ToolbarItem(placement: .topBarTrailing) {
-                            Button("完成") {
+                            Button("Done") {
                                 store.setDisplayedMonth(
                                     year: pickerSelection.year,
                                     month: pickerSelection.month

@@ -127,7 +127,7 @@ struct RepositoryLibraryStore {
 
         return RepositoryReference(
             id: RepositoryReference.localRepositoryID,
-            displayName: "我的仓库",
+            displayName: "My Repository",
             descriptor: descriptor,
             source: .local,
             lastKnownSnapshotUpdatedAt: snapshot?.updatedAt

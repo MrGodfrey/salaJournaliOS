@@ -36,9 +36,9 @@ struct EntryDetailView: View {
                 content(for: entry)
             } else {
                 ContentUnavailableView(
-                    "这篇文章已经不存在",
+                    "This entry no longer exists",
                     systemImage: "doc.text.magnifyingglass",
-                    description: Text("返回上一页继续浏览其他内容。")
+                    description: Text("Go back to continue browsing.")
                 )
             }
         }
@@ -46,14 +46,14 @@ struct EntryDetailView: View {
         .toolbar {
             if isEditing {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("取消") {
+                    Button("Cancel") {
                         cancelEditing()
                     }
                     .accessibilityIdentifier("entryDetailCancelButton")
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(isSaving ? "保存中..." : "保存") {
+                    Button(isSaving ? "Saving..." : "Save") {
                         Task {
                             await save()
                         }
@@ -64,7 +64,7 @@ struct EntryDetailView: View {
             } else if store.canEditRepository,
                       let entry = store.entry(matching: entryID) {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("编辑") {
+                    Button("Edit") {
                         startEditing(with: entry)
                     }
                     .accessibilityIdentifier("entryDetailEditButton")
@@ -75,18 +75,18 @@ struct EntryDetailView: View {
             await loadSelectedPhoto()
         }
         .alert(
-            "删除这篇文章？",
+            "Delete this entry?",
             isPresented: $isShowingDeleteConfirmation
         ) {
-            Button("删除", role: .destructive) {
+            Button("Delete", role: .destructive) {
                 Task {
                     await deleteCurrentEntry()
                 }
             }
 
-            Button("取消", role: .cancel) {}
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text("删除后将无法恢复。")
+            Text("This action cannot be undone.")
         }
     }
 
@@ -103,7 +103,7 @@ struct EntryDetailView: View {
                 )
 
                 Section {
-                    Button("删除这篇文章", role: .destructive) {
+                    Button("Delete This Entry", role: .destructive) {
                         isShowingDeleteConfirmation = true
                     }
                     .accessibilityIdentifier("entryDetailDeleteButton")

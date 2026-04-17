@@ -13,17 +13,17 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("仓库状态") {
-                    LabeledContent("当前仓库", value: store.currentRepositoryName)
-                    LabeledContent("当前权限", value: store.repositoryStatusTitle)
+                Section("Repository Status") {
+                    LabeledContent("Current Repository", value: store.currentRepositoryName)
+                    LabeledContent("Current Access", value: store.repositoryStatusTitle)
                     Text(store.repositorySummary)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
                 if store.canEditRepository {
-                    Section("CloudKit 共享") {
-                        Picker("邀请权限", selection: $store.shareAccessOption) {
+                    Section("CloudKit Sharing") {
+                        Picker("Invite Access", selection: $store.shareAccessOption) {
                             ForEach(ShareAccessOption.allCases) { option in
                                 Text(option.title).tag(option)
                             }
@@ -39,13 +39,13 @@ struct SettingsView: View {
                                 await store.presentSharingController()
                             }
                         } label: {
-                            Label("生成邀请链接", systemImage: "person.badge.plus")
+                            Label("Create Share Link", systemImage: "person.badge.plus")
                         }
                         .accessibilityIdentifier("presentShareControllerButton")
                     }
                 }
 
-                Section("打开共享仓库") {
+                Section("Open Shared Repository") {
                     TextField("https://www.icloud.com/share/...", text: $store.incomingShareLink, axis: .vertical)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
@@ -56,13 +56,13 @@ struct SettingsView: View {
                             await store.acceptIncomingShareLink()
                         }
                     } label: {
-                        Label("打开共享仓库", systemImage: "link")
+                        Label("Open Shared Repository", systemImage: "link")
                     }
                     .accessibilityIdentifier("acceptShareLinkButton")
                 }
 
-                Section("通知") {
-                    Toggle("共享仓库更新提醒", isOn: Binding(
+                Section("Notifications") {
+                    Toggle("Shared Repository Update Alerts", isOn: Binding(
                         get: { store.isSharedUpdateNotificationEnabled },
                         set: { isEnabled in
                             Task {
@@ -71,13 +71,13 @@ struct SettingsView: View {
                         }
                     ))
 
-                    Text("当你参与的共享仓库有文章新增或修改时，会发送可点击的系统通知。")
+                    Text("Send a tappable system notification when a shared repository you joined adds or updates entries.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
-                Section("安全") {
-                    Toggle("生物识别解锁", isOn: Binding(
+                Section("Security") {
+                    Toggle("Biometric Unlock", isOn: Binding(
                         get: { store.isBiometricLockEnabled },
                         set: { isEnabled in
                             Task {
@@ -86,27 +86,27 @@ struct SettingsView: View {
                         }
                     ))
 
-                    Text("开启后，每次打开应用或回到前台都需要先验证。")
+                    Text("When enabled, authentication is required every time the app launches or returns to the foreground.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
-                Section("导入导出") {
+                Section("Import / Export") {
                     Button {
                         Task {
                             await store.exportCurrentRepository()
                         }
                     } label: {
-                        Label("导出当前仓库 ZIP", systemImage: "square.and.arrow.up")
+                        Label("Export Current Repository as ZIP", systemImage: "square.and.arrow.up")
                     }
 
                     Button {
                         isShowingFileImporter = true
                     } label: {
-                        Label("导入 ZIP 到当前仓库", systemImage: "square.and.arrow.down")
+                        Label("Import ZIP into Current Repository", systemImage: "square.and.arrow.down")
                     }
 
-                    Text("导入会覆盖当前仓库内容；导出会生成一个 ZIP 文件，可在后台继续处理。")
+                    Text("Import replaces the current repository contents. Export creates a ZIP file and can continue in the background.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -121,9 +121,9 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("高级管理") {
+                Section("Advanced") {
                     Picker(
-                        "当前使用仓库",
+                        "Current Repository",
                         selection: Binding(
                             get: { store.currentRepositoryID },
                             set: { repositoryID in
@@ -139,7 +139,7 @@ struct SettingsView: View {
                     }
 
                     Picker(
-                        "启动时默认打开",
+                        "Default on Launch",
                         selection: Binding(
                             get: { store.defaultRepositoryID },
                             set: { repositoryID in
@@ -152,34 +152,34 @@ struct SettingsView: View {
                         }
                     }
 
-                    Button("清空当前仓库内容", role: .destructive) {
+                    Button("Clear Current Repository", role: .destructive) {
                         isShowingClearRepositoryConfirmation = true
                     }
                     .disabled(!store.canEditRepository)
                 }
             }
-            .navigationTitle("设置")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") {
+                    Button("Done") {
                         dismiss()
                     }
                 }
             }
             .alert(
-                "清空当前仓库？",
+                "Clear the current repository?",
                 isPresented: $isShowingClearRepositoryConfirmation
             ) {
-                Button("清空", role: .destructive) {
+                Button("Clear", role: .destructive) {
                     Task {
                         await store.clearCurrentRepository()
                     }
                 }
 
-                Button("取消", role: .cancel) {}
+                Button("Cancel", role: .cancel) {}
             } message: {
-                Text("当前仓库里的所有文章和图片都会被删除，这个操作无法撤销。")
+                Text("All entries and images in the current repository will be deleted. This action cannot be undone.")
             }
             .fileImporter(
                 isPresented: $isShowingFileImporter,

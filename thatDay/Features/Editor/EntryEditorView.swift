@@ -37,18 +37,18 @@ struct EntryEditorView: View {
                     imageRefreshVersion: store.imageRefreshVersion
                 )
             }
-            .navigationTitle(session.mode == .create ? "新建 \(session.kind.title)" : "编辑 \(session.kind.title)")
+            .navigationTitle(session.mode == .create ? "New \(session.kind.title)" : "Edit \(session.kind.title)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("取消") {
+                    Button("Cancel") {
                         store.dismissEditor()
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(isSaving ? "保存中..." : "保存") {
+                    Button(isSaving ? "Saving..." : "Save") {
                         Task {
                             await save()
                         }

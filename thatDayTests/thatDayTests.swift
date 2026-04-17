@@ -193,7 +193,7 @@ final class thatDayTests: XCTestCase {
 
         XCTAssertEqual(
             AppStore.userFacingMessage(for: error),
-            "CloudKit 生产环境还没有部署记录类型 RepositoryRoot。请先在 CloudKit Console 的 Deploy Schema Changes 中把 development schema 发布到 production，然后再重新生成邀请链接。"
+            "The CloudKit production environment has not deployed the RepositoryRoot record type yet. Deploy the development schema to production in CloudKit Console, then create the share link again."
         )
     }
 
@@ -218,7 +218,7 @@ final class thatDayTests: XCTestCase {
 
         XCTAssertEqual(
             AppStore.userFacingMessage(for: error),
-            "CloudKit 生产环境还没有部署记录类型 RepositoryRoot。请先在 CloudKit Console 的 Deploy Schema Changes 中把 development schema 发布到 production，然后再重新生成邀请链接。"
+            "The CloudKit production environment has not deployed the RepositoryRoot record type yet. Deploy the development schema to production in CloudKit Console, then create the share link again."
         )
     }
 
@@ -252,7 +252,7 @@ final class thatDayTests: XCTestCase {
         )
 
         await store.loadIfNeeded()
-        XCTAssertEqual(biometricAuthenticator.reasons, ["打开 thatDay 需要验证"])
+        XCTAssertEqual(biometricAuthenticator.reasons, ["Unlock thatDay"])
         XCTAssertFalse(store.isAuthenticationRequired)
 
         await store.handleScenePhaseChange(.active)
@@ -263,7 +263,7 @@ final class thatDayTests: XCTestCase {
         XCTAssertTrue(store.isAuthenticationRequired)
 
         await store.handleScenePhaseChange(.active)
-        XCTAssertEqual(biometricAuthenticator.reasons, ["打开 thatDay 需要验证", "打开 thatDay 需要验证"])
+        XCTAssertEqual(biometricAuthenticator.reasons, ["Unlock thatDay", "Unlock thatDay"])
         XCTAssertFalse(store.isAuthenticationRequired)
     }
 
@@ -296,7 +296,7 @@ final class thatDayTests: XCTestCase {
                 role: .viewer
             ),
             snapshot: sharedSnapshot,
-            displayName: "共享仓库"
+            displayName: "Shared Repository"
         )
         cloudService.loadedSnapshot = sharedSnapshot
 
@@ -356,7 +356,7 @@ final class thatDayTests: XCTestCase {
             RepositoryReference.local,
             RepositoryReference(
                 id: sharedDescriptor.storageIdentifier,
-                displayName: "共享仓库",
+                displayName: "Shared Repository",
                 descriptor: sharedDescriptor,
                 source: .shared,
                 lastKnownSnapshotUpdatedAt: sharedSnapshot.updatedAt
@@ -421,7 +421,7 @@ final class thatDayTests: XCTestCase {
             RepositoryReference.local,
             RepositoryReference(
                 id: repositoryID,
-                displayName: "共享仓库",
+                displayName: "Shared Repository",
                 descriptor: sharedDescriptor,
                 source: .shared,
                 lastKnownSnapshotUpdatedAt: snapshot.updatedAt
@@ -522,7 +522,7 @@ final class thatDayTests: XCTestCase {
             RepositoryReference.local,
             RepositoryReference(
                 id: repositoryID,
-                displayName: "共享仓库",
+                displayName: "Shared Repository",
                 descriptor: sharedDescriptor,
                 source: .shared,
                 lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
@@ -802,7 +802,7 @@ final class thatDayTests: XCTestCase {
             RepositoryReference.local,
             RepositoryReference(
                 id: repositoryID,
-                displayName: "共享仓库",
+                displayName: "Shared Repository",
                 descriptor: sharedDescriptor,
                 source: .shared,
                 lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
@@ -889,7 +889,7 @@ final class thatDayTests: XCTestCase {
             RepositoryReference.local,
             RepositoryReference(
                 id: repositoryID,
-                displayName: "共享仓库",
+                displayName: "Shared Repository",
                 descriptor: sharedDescriptor,
                 source: .shared,
                 lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
@@ -940,7 +940,7 @@ final class thatDayTests: XCTestCase {
             ) { _, _ in }
             XCTFail("Expected importArchive to throw")
         } catch let error as RepositoryArchiveError {
-            XCTAssertEqual(error.errorDescription, "无法读取所选 ZIP 文件，请重新选择后再试。")
+            XCTAssertEqual(error.errorDescription, "The selected ZIP file could not be read. Choose it again and retry.")
         }
     }
 

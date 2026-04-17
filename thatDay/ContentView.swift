@@ -36,7 +36,7 @@ struct ContentView: View {
         }
         .overlay(alignment: .center) {
             if store.isBusy {
-                ProgressView("处理中...")
+                ProgressView("Processing...")
                     .padding(20)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
@@ -62,7 +62,7 @@ struct ContentView: View {
             SettingsView(store: store)
         }
         .alert(
-            "提示",
+            "Notice",
             isPresented: Binding(
                 get: { store.alertMessage != nil },
                 set: { value in
@@ -72,7 +72,7 @@ struct ContentView: View {
                 }
             )
         ) {
-            Button("确定", role: .cancel) {}
+            Button("OK", role: .cancel) {}
         } message: {
             Text(store.alertMessage ?? "")
         }
@@ -100,15 +100,15 @@ private struct AppLockOverlay: View {
                     .foregroundStyle(.primary)
 
                 VStack(spacing: 8) {
-                    Text("生物识别保护已开启")
+                    Text("Biometric lock is enabled")
                         .font(.title3.bold())
 
-                    Text("验证后才能查看当前仓库内容。")
+                    Text("Authenticate to view the current repository.")
                         .font(.body)
                         .foregroundStyle(.secondary)
                 }
 
-                Button(isAuthenticating ? "验证中..." : "重新验证") {
+                Button(isAuthenticating ? "Authenticating..." : "Try Again") {
                     unlockAction()
                 }
                 .buttonStyle(.borderedProminent)

@@ -11,9 +11,9 @@ struct JournalView: View {
             List {
                 if store.journalSections.isEmpty {
                     ContentUnavailableView(
-                        "这一天还没有 Journal",
+                        "No journal entries on this day",
                         systemImage: "calendar.badge.exclamationmark",
-                        description: Text("换一个日期，或者为今天补一条新的记录。")
+                        description: Text("Try another date, or add a new entry for today.")
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 80)
@@ -60,7 +60,7 @@ struct JournalView: View {
                     )
                 } else {
                     ContentUnavailableView(
-                        "这篇文章已经不存在",
+                        "This entry no longer exists",
                         systemImage: "doc.text.magnifyingglass"
                     )
                 }
@@ -132,20 +132,21 @@ struct JournalView: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                Button {
-                    store.showEditor(for: .journal)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 56, height: 56)
-                        .background(Color.indigo, in: Circle())
-                        .shadow(color: Color.black.opacity(0.18), radius: 12, y: 6)
+                if store.canEditRepository {
+                    Button {
+                        store.showEditor(for: .journal)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 56, height: 56)
+                            .background(Color.indigo, in: Circle())
+                            .shadow(color: Color.black.opacity(0.18), radius: 12, y: 6)
+                    }
+                    .padding(.trailing, 24)
+                    .padding(.bottom, 20)
+                    .accessibilityIdentifier("addJournalEntryButton")
                 }
-                .disabled(!store.canEditRepository)
-                .padding(.trailing, 24)
-                .padding(.bottom, 20)
-                .accessibilityIdentifier("addJournalEntryButton")
             }
         }
     }

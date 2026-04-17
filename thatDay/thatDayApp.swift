@@ -35,6 +35,7 @@ struct thatDayApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(store: store)
+                .environment(\.locale, AppLanguage.locale)
                 .task(id: cloudShareDeliveryCenter.deliverySequence) {
                     for metadata in cloudShareDeliveryCenter.drainPendingMetadata() {
                         await store.acceptShare(metadata: metadata)

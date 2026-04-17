@@ -65,15 +65,15 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
     }
 
     var weekdayTitle: String {
-        happenedAt.formatted(.dateTime.weekday(.wide))
+        AppLanguage.weekdayTitle(for: happenedAt)
     }
 
     var timelineTitle: String {
-        happenedAt.formatted(.dateTime.year().month(.wide).day())
+        AppLanguage.timelineTitle(for: happenedAt)
     }
 
     var cardDateTitle: String {
-        Self.cardDateFormatter.string(from: happenedAt)
+        AppLanguage.cardDateTitle(for: happenedAt)
     }
 
     var searchableText: String {
@@ -81,12 +81,4 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
             .joined(separator: " ")
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
-
-    private static let cardDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.calendar = .current
-        formatter.dateFormat = "EEEE, M/d/yyyy"
-        return formatter
-    }()
 }

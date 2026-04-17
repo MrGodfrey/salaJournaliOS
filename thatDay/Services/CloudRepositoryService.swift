@@ -34,17 +34,17 @@ enum CloudRepositoryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .repositoryDescriptorMissing:
-            "当前仓库还没有绑定 CloudKit。"
+            "The current repository is not connected to CloudKit yet."
         case .shareLinkInvalid:
-            "请输入有效的 iCloud 共享链接。"
+            "Enter a valid iCloud share link."
         case .repositoryNotFound:
-            "没有找到当前共享仓库的数据。"
+            "No data was found for the current shared repository."
         case .repositoryLocked:
-            "当前共享仓库是只读状态，不能修改。"
+            "The current shared repository is read-only and cannot be changed."
         case .invalidRepositoryData:
-            "CloudKit 中的仓库数据无法识别。"
+            "The repository data in CloudKit could not be recognized."
         case .shareUnavailable:
-            "当前无法生成共享邀请，请确认 iCloud 和 CloudKit 配置已经完成。"
+            "A share invite cannot be created right now. Confirm that iCloud and CloudKit are configured."
         }
     }
 }
@@ -227,7 +227,7 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         return AcceptedSharedRepository(
             descriptor: descriptor,
             snapshot: snapshot,
-            displayName: ownerDisplayName.map { "\($0) 的共享仓库" } ?? descriptor.defaultDisplayName
+            displayName: ownerDisplayName.map { "\($0)'s Shared Repository" } ?? descriptor.defaultDisplayName
         )
     }
 
