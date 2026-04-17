@@ -23,6 +23,7 @@ struct EntryEditorView: View {
                 title: session.entry?.title ?? "",
                 body: session.entry?.body ?? "",
                 blogTag: session.entry?.blogTag ?? (session.kind == .blog ? store.defaultBlogTag : nil),
+                blogImageLayout: session.entry?.blogImageLayout ?? .landscape,
                 happenedAt: session.entry?.happenedAt ?? session.defaultDate
             )
         )

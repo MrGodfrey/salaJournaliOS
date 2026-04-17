@@ -25,12 +25,29 @@ enum EntryKind: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
+enum BlogCardImageLayout: String, CaseIterable, Codable, Identifiable, Sendable {
+    case landscape
+    case portrait
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .landscape:
+            "Landscape"
+        case .portrait:
+            "Portrait"
+        }
+    }
+}
+
 struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var kind: EntryKind
     var title: String
     var body: String
     var blogTag: String?
+    var blogImageLayout: BlogCardImageLayout
     var happenedAt: Date
     var createdAt: Date
     var updatedAt: Date
@@ -42,6 +59,7 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
         title: String,
         body: String,
         blogTag: String? = nil,
+        blogImageLayout: BlogCardImageLayout = .landscape,
         happenedAt: Date,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -52,10 +70,52 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
         self.title = title
         self.body = body
         self.blogTag = blogTag?.trimmed.nilIfEmpty
+        self.blogImageLayout = blogImageLayout
         self.happenedAt = happenedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.imageReference = imageReference?.trimmed.nilIfEmpty
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case title
+        case body
+        case blogTag
+        case blogImageLayout
+        case happenedAt
+        case createdAt
+        case updatedAt
+        case imageReference
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        kind = try container.decode(EntryKind.self, forKey: .kind)
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decode(String.self, forKey: .body)
+        blogTag = try container.decodeIfPresent(String.self, forKey: .blogTag)?.trimmed.nilIfEmpty
+        blogImageLayout = try container.decodeIfPresent(BlogCardImageLayout.self, forKey: .blogImageLayout) ?? .landscape
+        happenedAt = try container.decode(Date.self, forKey: .happenedAt)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        imageReference = try container.decodeIfPresent(String.self, forKey: .imageReference)?.trimmed.nilIfEmpty
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(title, forKey: .title)
+        try container.encode(body, forKey: .body)
+        try container.encodeIfPresent(blogTag, forKey: .blogTag)
+        try container.encode(blogImageLayout, forKey: .blogImageLayout)
+        try container.encode(happenedAt, forKey: .happenedAt)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(imageReference, forKey: .imageReference)
     }
 
     var summary: String {
@@ -77,6 +137,10 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
 
     var cardDateTitle: String {
         AppLanguage.cardDateTitle(for: happenedAt)
+    }
+
+    var journalCardDateTitle: String {
+        AppLanguage.journalCardDateTitle(for: happenedAt)
     }
 
     var yearTitle: String {

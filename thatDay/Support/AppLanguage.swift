@@ -41,6 +41,10 @@ enum AppLanguage {
         cardDateFormatter.string(from: date)
     }
 
+    static func journalCardDateTitle(for date: Date) -> String {
+        journalCardDateFormatter.string(from: date)
+    }
+
     static func yearTitle(for date: Date) -> String {
         yearFormatter.string(from: date)
     }
@@ -51,6 +55,7 @@ enum AppLanguage {
     private static let weekdayFormatter = makeFormatter(dateFormat: "EEEE")
     private static let timelineFormatter = makeFormatter(dateFormat: "MMMM d, yyyy")
     private static let cardDateFormatter = makeFormatter(dateFormat: "EEEE, M/d/yyyy")
+    private static let journalCardDateFormatter = makeFormatter(dateFormat: "EEEE, yyyy")
     private static let yearFormatter = makeFormatter(dateFormat: "yyyy")
 
     private static func makeFormatter(dateFormat: String) -> DateFormatter {

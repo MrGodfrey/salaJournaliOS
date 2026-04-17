@@ -410,3 +410,84 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
   - 整套测试通过：`thatDayTests 33/33`，`thatDayUITests + LaunchTests 19/19`
   - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_22-24-20-+0800.xcresult`
+
+## 2026-04-17 22:44
+
+- Blog 卡片新增图片布局能力：
+  - 保留现有横版封面卡片
+  - 新增竖版封面卡片，带图文章可切换为左侧竖图、右侧标题 / 两行摘要 / 日期标签布局
+  - 旧仓库数据缺少布局字段时，默认回退到横版，保持兼容
+- Blog 编辑页新增 `Landscape / Portrait` segmented control，用来在两种带图卡片布局之间二选一切换
+- 文章模型和保存链路新增 `blogImageLayout` 持久化字段，并同步接入详情页编辑流
+- `README.md` 已同步更新：
+  - 补充 Blog 横版 / 竖版卡片布局说明
+  - 补充编辑页图片布局切换选项
+  - 补充 `EntryRecord` 和 `repository.json` 会保存 Blog 图片卡片布局
+- 新增 / 更新测试：
+  - 单元测试新增 `testSavingBlogEntryPersistsSelectedImageLayout`
+  - 单元测试新增 `testLoadingLegacyBlogEntryDefaultsImageLayoutToLandscape`
+  - UI 测试新增 `testBlogEditorPersistsImageLayoutSelection`
+  - UI 测试新增 `testPortraitBlogCardUsesSideBySideLayout`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `35/35` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_22-41-52-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testBlogEditorPersistsImageLayoutSelection -only-testing:thatDayUITests/thatDayUITests/testPortraitBlogCardUsesSideBySideLayout`
+    - 定向 UI 测试 `2/2` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_22-43-22-+0800.xcresult`
+
+## 2026-04-17 22:58
+
+- 微调竖版 Blog 展示：
+  - 竖版文章卡片右侧摘要从 `2` 行放宽到 `4` 行
+  - 竖版文章详情页头图改为完整显示，不再裁剪
+  - 补充详情页竖版头图的可访问性标识，便于 UI 测试稳定定位
+- `README.md` 已同步更新：
+  - 将竖版 Blog 卡片描述改为 `四行摘要`
+  - 补充竖版 Blog 详情页题图完整显示规则
+- 新增 / 更新测试：
+  - UI 测试新增 `testPortraitBlogDetailShowsFullCoverWithoutCropping`
+  - UI 测试里的竖版种子图片改为真实竖图，避免用方图误判布局
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testBlogEditorPersistsImageLayoutSelection -only-testing:thatDayUITests/thatDayUITests/testPortraitBlogCardUsesSideBySideLayout -only-testing:thatDayUITests/thatDayUITests/testPortraitBlogDetailShowsFullCoverWithoutCropping`
+    - 定向 UI 测试 `3/3` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_22-57-02-+0800.xcresult`
+
+## 2026-04-17 23:05
+
+- 调整 Journal 卡片日期展示：
+  - 原先只显示年份
+  - 现在改为显示 `星期, 年份`，例如 `Thursday, 2026`
+- `README.md` 已同步更新：
+  - 首页能力说明里的 Journal 卡片日期描述改成 `星期 + 年份`
+  - `Journal` 章节补充新的卡片日期示例
+- 新增 / 更新测试：
+  - 单元测试新增 `testJournalCardDateIncludesWeekdayBeforeYear`
+
+## 2026-04-17 23:10
+
+- 继续收紧竖版 Blog 详情页头图展示：
+  - 保持题图全宽展示，不裁左右
+  - 为竖图详情头图增加最大高度限制，避免占满首屏
+  - 当题图高度超过上限时，改为居中裁掉上下超出的部分
+- `README.md` 已同步更新竖版详情页头图规则说明
+- 更新测试：
+  - 将 UI 测试改为 `testPortraitBlogDetailCapsCoverHeightWithoutCroppingWidth`
+
+## 2026-04-17 23:11
+
+- 补充 Journal 卡片日期展示的验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testJournalCardDateIncludesWeekdayBeforeYear`
+    - 定向单元测试 `1/1` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_23-05-59-+0800.xcresult`
+
+## 2026-04-17 23:14
+
+- 收口竖版 Blog 详情页头图高度限制实现：
+  - 竖版头图改为挂在固定最大高度容器内渲染，避免继续占满手机首屏
+  - 仍保持横向全宽展示；超出上限的部分继续通过居中裁切消化
+  - 为详情页头图补了一个透明可访问定位层，让 UI 测试读取到实际显示框，而不是内部图片原始尺寸
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testPortraitBlogDetailCapsCoverHeightWithoutCroppingWidth`
+    - 定向 UI 测试 `1/1` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_23-14-25-+0800.xcresult`

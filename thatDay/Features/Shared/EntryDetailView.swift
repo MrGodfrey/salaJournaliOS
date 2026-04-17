@@ -4,6 +4,9 @@ import SwiftUI
 import UIKit
 
 struct EntryDetailView: View {
+    private static let portraitDetailCoverMaxAspectRatio: CGFloat = 1.3
+    private static let portraitDetailCoverMaxHeight: CGFloat = 520
+
     @Environment(\.dismiss) private var dismiss
     @Bindable var store: AppStore
 
@@ -27,6 +30,7 @@ struct EntryDetailView: View {
                 title: entry.title,
                 body: entry.body,
                 blogTag: entry.blogTag ?? (entry.kind == .blog ? store.defaultBlogTag : nil),
+                blogImageLayout: entry.blogImageLayout,
                 happenedAt: entry.happenedAt
             )
         )
@@ -158,39 +162,103 @@ struct EntryDetailView: View {
     @ViewBuilder
     private func readerCover(for entry: EntryRecord) -> some View {
         if let imageURL = store.imageURL(for: entry) {
-            Group {
-                if let image = imageURL.repositoryLocalImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    AsyncImage(url: imageURL) { phase in
-                        switch phase {
-                        case .empty:
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 0, style: .continuous)
-                                    .fill(Color(.secondarySystemGroupedBackground))
+            let accessibilityID = "entryDetailCover-\(entry.id.uuidString)"
 
-                                ProgressView()
-                            }
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure:
-                            RoundedRectangle(cornerRadius: 0, style: .continuous)
-                                .fill(Color(.secondarySystemGroupedBackground))
-                        @unknown default:
-                            RoundedRectangle(cornerRadius: 0, style: .continuous)
-                                .fill(Color(.secondarySystemGroupedBackground))
+            if usesPortraitImageLayout(for: entry) {
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Self.portraitDetailCoverMaxHeight)
+                    .overlay {
+                        GeometryReader { proxy in
+                            detailCoverContent(
+                                for: imageURL,
+                                contentMode: portraitDetailCoverContentMode(for: imageURL)
+                            )
+                            .id("detail-cover-\(entry.id.uuidString)-\(store.imageRefreshVersion)")
+                            .frame(width: proxy.size.width, height: proxy.size.height)
                         }
                     }
+                    .clipped()
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .overlay {
+                        Color.clear
+                            .accessibilityElement()
+                            .accessibilityIdentifier(accessibilityID)
+                    }
+            } else {
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 260)
+                    .overlay {
+                        detailCoverContent(for: imageURL, contentMode: .fill)
+                            .id("detail-cover-\(entry.id.uuidString)-\(store.imageRefreshVersion)")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .clipped()
+                    .overlay {
+                        Color.clear
+                            .accessibilityElement()
+                            .accessibilityIdentifier(accessibilityID)
+                    }
+            }
+        }
+    }
+
+    private func usesPortraitImageLayout(for entry: EntryRecord) -> Bool {
+        entry.kind == .blog && entry.blogImageLayout == .portrait
+    }
+
+    private func portraitDetailCoverContentMode(for imageURL: URL) -> ContentMode {
+        guard let imageAspectRatio = coverImageAspectRatio(for: imageURL) else {
+            return .fill
+        }
+
+        return imageAspectRatio > Self.portraitDetailCoverMaxAspectRatio ? .fill : .fit
+    }
+
+    private func coverImageAspectRatio(for imageURL: URL) -> CGFloat? {
+        if let image = imageURL.repositoryLocalImage,
+           image.size.width > 0 {
+            return image.size.height / image.size.width
+        }
+
+        if imageURL.isFileURL,
+           let image = UIImage(contentsOfFile: imageURL.path),
+           image.size.width > 0 {
+            return image.size.height / image.size.width
+        }
+
+        return nil
+    }
+
+    @ViewBuilder
+    private func detailCoverContent(for imageURL: URL, contentMode: ContentMode) -> some View {
+        if let image = imageURL.repositoryLocalImage {
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: contentMode)
+        } else {
+            AsyncImage(url: imageURL) { phase in
+                switch phase {
+                case .empty:
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 0, style: .continuous)
+                            .fill(Color(.secondarySystemGroupedBackground))
+
+                        ProgressView()
+                    }
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                case .failure:
+                    RoundedRectangle(cornerRadius: 0, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                @unknown default:
+                    RoundedRectangle(cornerRadius: 0, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
                 }
             }
-            .id("detail-cover-\(entry.id.uuidString)-\(store.imageRefreshVersion)")
-            .frame(maxWidth: .infinity)
-            .frame(height: 260)
-            .clipped()
         }
     }
 
@@ -200,6 +268,7 @@ struct EntryDetailView: View {
             title: entry.title,
             body: entry.body,
             blogTag: entry.blogTag ?? (entry.kind == .blog ? store.defaultBlogTag : nil),
+            blogImageLayout: entry.blogImageLayout,
             happenedAt: entry.happenedAt
         )
         importedImageData = nil
@@ -215,6 +284,7 @@ struct EntryDetailView: View {
                 title: entry.title,
                 body: entry.body,
                 blogTag: entry.blogTag ?? (entry.kind == .blog ? store.defaultBlogTag : nil),
+                blogImageLayout: entry.blogImageLayout,
                 happenedAt: entry.happenedAt
             )
         }

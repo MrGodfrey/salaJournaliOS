@@ -397,10 +397,12 @@ final class AppStore {
             let blogTag = normalized.kind == .blog
                 ? normalizedBlogTag(for: normalized.blogTag, availableTags: blogTags)
                 : nil
+            let blogImageLayout = normalized.kind == .blog ? normalized.blogImageLayout : .landscape
             if var existing = editingEntry {
                 existing.title = normalized.title
                 existing.body = normalized.body
                 existing.blogTag = blogTag
+                existing.blogImageLayout = blogImageLayout
                 existing.happenedAt = normalized.happenedAt
                 existing.updatedAt = timestamp
                 existing.imageReference = imageReference
@@ -416,6 +418,7 @@ final class AppStore {
                         title: normalized.title,
                         body: normalized.body,
                         blogTag: blogTag,
+                        blogImageLayout: blogImageLayout,
                         happenedAt: normalized.happenedAt,
                         createdAt: timestamp,
                         updatedAt: timestamp,

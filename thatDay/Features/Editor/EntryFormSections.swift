@@ -30,6 +30,14 @@ struct EntryFormSections: View {
                     }
                 }
                 .accessibilityIdentifier("entryBlogTagPicker")
+
+                Picker("Image Layout", selection: $draft.blogImageLayout) {
+                    ForEach(BlogCardImageLayout.allCases) { layout in
+                        Text(layout.title).tag(layout)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("entryBlogImageLayoutPicker")
             }
         }
 

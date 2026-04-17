@@ -21,15 +21,20 @@ struct EntryCardView: View {
 
     var body: some View {
         Group {
-            if let imageURL {
+            if usesPortraitImageLayout, let imageURL {
+                portraitCard(for: imageURL)
+            } else if let imageURL {
                 VStack(alignment: .leading, spacing: 0) {
-                    coverImage(for: imageURL)
+                    coverImageContent(for: imageURL)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 204)
+                        .clipped()
                         .id("cover-\(entry.id.uuidString)-\(imageRefreshVersion)")
-                    cardText
+                    cardText(summaryLineLimit: 3, titleLineLimit: 1)
                         .padding(16)
                 }
             } else {
-                cardText
+                cardText(summaryLineLimit: 3, titleLineLimit: 1)
                     .padding(16)
             }
         }
@@ -42,36 +47,74 @@ struct EntryCardView: View {
         .accessibilityIdentifier("entryCard-\(entry.id.uuidString)")
     }
 
-    private var cardText: some View {
+    private var usesPortraitImageLayout: Bool {
+        entry.kind == .blog && entry.blogImageLayout == .portrait
+    }
+
+    private func portraitCard(for imageURL: URL) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            coverImageContent(for: imageURL)
+                .frame(width: 108, height: 152)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .id("cover-\(entry.id.uuidString)-\(imageRefreshVersion)")
+
+            VStack(alignment: .leading, spacing: 12) {
+                if let title = entry.displayTitle {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+
+                Text(entry.summary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+
+                Spacer(minLength: 0)
+
+                cardMetadata
+            }
+            .frame(maxWidth: .infinity, minHeight: 152, alignment: .leading)
+        }
+        .padding(16)
+    }
+
+    private func cardText(summaryLineLimit: Int, titleLineLimit: Int) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if let title = entry.displayTitle {
                 Text(title)
                     .font(.headline)
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .lineLimit(titleLineLimit)
             }
 
             Text(entry.summary)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-                .lineLimit(3)
+                .lineLimit(summaryLineLimit)
 
-            HStack(spacing: 8) {
-                Text(dateText ?? entry.cardDateTitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let tag = entry.blogTag,
-                   entry.kind == .blog {
-                    BlogTagChip(tag: tag)
-                }
-            }
+            cardMetadata
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var cardMetadata: some View {
+        HStack(spacing: 8) {
+            Text(dateText ?? entry.cardDateTitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let tag = entry.blogTag,
+               entry.kind == .blog {
+                BlogTagChip(tag: tag)
+            }
+        }
+    }
+
     @ViewBuilder
-    private func coverImage(for imageURL: URL) -> some View {
+    private func coverImageContent(for imageURL: URL) -> some View {
         Group {
             if let image = imageURL.repositoryLocalImage {
                 Image(uiImage: image)
@@ -97,9 +140,6 @@ struct EntryCardView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 204)
-        .clipped()
     }
 }
 

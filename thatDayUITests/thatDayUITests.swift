@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class thatDayUITests: XCTestCase {
     override func setUpWithError() throws {
@@ -155,6 +156,43 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testBlogEditorPersistsImageLayoutSelection() throws {
+        let app = launchApp()
+
+        app.tabBars.buttons["Blog"].tap()
+        XCTAssertTrue(app.buttons["addBlogEntryButton"].waitForExistence(timeout: 5))
+        app.buttons["addBlogEntryButton"].tap()
+
+        let titleField = app.textFields["entryTitleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.tap()
+        titleField.typeText("Portrait Preference")
+
+        let layoutPicker = app.segmentedControls["entryBlogImageLayoutPicker"]
+        XCTAssertTrue(layoutPicker.waitForExistence(timeout: 5))
+        layoutPicker.buttons["Portrait"].tap()
+
+        let bodyEditor = app.textViews.element(boundBy: 0)
+        XCTAssertTrue(bodyEditor.waitForExistence(timeout: 5))
+        bodyEditor.tap()
+        bodyEditor.typeText("This post should remember its portrait card preference.")
+
+        app.buttons["saveEntryButton"].tap()
+
+        let createdTitle = app.staticTexts["Portrait Preference"]
+        XCTAssertTrue(createdTitle.waitForExistence(timeout: 5))
+        createdTitle.tap()
+
+        let editButton = app.buttons["entryDetailEditButton"]
+        XCTAssertTrue(editButton.waitForExistence(timeout: 5))
+        editButton.tap()
+
+        let persistedLayoutPicker = app.segmentedControls["entryBlogImageLayoutPicker"]
+        XCTAssertTrue(persistedLayoutPicker.waitForExistence(timeout: 5))
+        XCTAssertTrue(persistedLayoutPicker.buttons["Portrait"].isSelected)
+    }
+
+    @MainActor
     func testCreateBlogPostAppearsInSearch() throws {
         let app = launchApp()
 
@@ -201,6 +239,39 @@ final class thatDayUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Trip Recap"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Reading Summary"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor
+    func testPortraitBlogCardUsesSideBySideLayout() throws {
+        let app = launchApp { storageRoot in
+            try self.seedPortraitBlogRepository(at: storageRoot)
+        }
+
+        app.tabBars.buttons["Blog"].tap()
+
+        let title = app.staticTexts["Interstellar (2014)"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+
+        XCTAssertGreaterThan(title.frame.minX, 100)
+    }
+
+    @MainActor
+    func testPortraitBlogDetailCapsCoverHeightWithoutCroppingWidth() throws {
+        let app = launchApp { storageRoot in
+            try self.seedPortraitBlogRepository(at: storageRoot)
+        }
+
+        app.tabBars.buttons["Blog"].tap()
+
+        let title = app.staticTexts["Interstellar (2014)"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+
+        let cover = app.otherElements["entryDetailCover-7BFC7E5E-EBB3-46D0-B2D0-A9CE4B63B8B2"]
+        XCTAssertTrue(cover.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(cover.frame.width, app.windows.firstMatch.frame.width * 0.85)
+        XCTAssertGreaterThan(cover.frame.height, cover.frame.width)
+        XCTAssertLessThan(cover.frame.height, cover.frame.width * 1.4)
     }
 
     @MainActor
@@ -463,11 +534,69 @@ final class thatDayUITests: XCTestCase {
         try writeJSON(snapshot, to: repositoryRoot.appendingPathComponent("repository.json"))
     }
 
+    private func seedPortraitBlogRepository(at storageRoot: URL) throws {
+        let fileManager = FileManager.default
+        let repositoryRoot = storageRoot
+            .appendingPathComponent("repositories", isDirectory: true)
+            .appendingPathComponent("local", isDirectory: true)
+        let imagesRoot = repositoryRoot.appendingPathComponent("images", isDirectory: true)
+        let isoDate = "2026-04-16T09:00:00Z"
+        let imageName = "interstellar-cover.png"
+        let imageData = makePortraitSeedImageData()
+
+        try fileManager.createDirectory(at: repositoryRoot, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: imagesRoot, withIntermediateDirectories: true)
+        try imageData.write(to: imagesRoot.appendingPathComponent(imageName), options: .atomic)
+
+        let descriptor: [String: Any] = [
+            "role": "local"
+        ]
+        let snapshot: [String: Any] = [
+            "blogTags": ["Watching", "note"],
+            "entries": [
+                [
+                    "id": "7BFC7E5E-EBB3-46D0-B2D0-A9CE4B63B8B2",
+                    "kind": "blog",
+                    "title": "Interstellar (2014)",
+                    "body": "A profound exploration of love and gravity, Nolan folds intimacy into cosmic scale.",
+                    "blogTag": "Watching",
+                    "blogImageLayout": "portrait",
+                    "imageReference": imageName,
+                    "happenedAt": isoDate,
+                    "createdAt": isoDate,
+                    "updatedAt": isoDate
+                ]
+            ],
+            "updatedAt": isoDate
+        ]
+
+        try writeJSON(descriptor, to: repositoryRoot.appendingPathComponent("descriptor.json"))
+        try writeJSON(snapshot, to: repositoryRoot.appendingPathComponent("repository.json"))
+    }
+
     private func writeJSON(_ value: Any, to url: URL) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: .atomic)
+    }
+
+    private func makePortraitSeedImageData() -> Data {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 240, height: 420))
+        let image = renderer.image { context in
+            UIColor(red: 0.08, green: 0.12, blue: 0.23, alpha: 1).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 240, height: 420))
+
+            UIColor(red: 0.71, green: 0.82, blue: 0.96, alpha: 1).setFill()
+            context.fill(CGRect(x: 24, y: 28, width: 192, height: 192))
+
+            UIColor.white.withAlphaComponent(0.8).setFill()
+            context.fill(CGRect(x: 34, y: 250, width: 172, height: 20))
+            context.fill(CGRect(x: 34, y: 286, width: 140, height: 16))
+            context.fill(CGRect(x: 34, y: 316, width: 120, height: 16))
+        }
+
+        return image.pngData() ?? Data()
     }
 
     private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 6) {

@@ -26,7 +26,7 @@ struct JournalView: View {
                                 entry: entry,
                                 imageURL: store.imageURL(for: entry),
                                 imageRefreshVersion: store.imageRefreshVersion,
-                                dateText: entry.yearTitle
+                                dateText: entry.journalCardDateTitle
                             )
                         }
                         .navigationLinkIndicatorVisibility(.hidden)

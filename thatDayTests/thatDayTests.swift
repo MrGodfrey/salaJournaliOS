@@ -24,6 +24,15 @@ final class thatDayTests: XCTestCase {
         XCTAssertEqual(store.journalEntries.map(\.title), ["2026", "2025", "2024", "2023"])
     }
 
+    func testJournalCardDateIncludesWeekdayBeforeYear() {
+        let entry = makeEntry(
+            title: "Weekday Journal",
+            happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+        )
+
+        XCTAssertEqual(entry.journalCardDateTitle, "Thursday, 2026")
+    }
+
     @MainActor
     func testEmptySearchDoesNotShowAnyResults() async throws {
         let store = try makeStore(
@@ -159,6 +168,70 @@ final class thatDayTests: XCTestCase {
 
         XCTAssertTrue(reloadedStore.blogEntries.contains(where: { $0.title == "A New Persisted Blog" }))
         XCTAssertEqual(reloadedStore.currentRepositoryID, RepositoryReference.localRepositoryID)
+    }
+
+    @MainActor
+    func testSavingBlogEntryPersistsSelectedImageLayout() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let cloudService = MockCloudRepositoryService()
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T09:00:00Z") }
+        )
+
+        await store.loadIfNeeded()
+
+        let didSave = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .blog,
+                title: "Portrait Blog",
+                body: "Saved with portrait layout.",
+                blogImageLayout: .portrait,
+                happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+            ),
+            importedImageData: nil
+        )
+
+        XCTAssertTrue(didSave)
+
+        let reloadedStore = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T09:00:00Z") }
+        )
+        await reloadedStore.loadIfNeeded()
+
+        XCTAssertEqual(reloadedStore.blogEntries.first?.blogImageLayout, .portrait)
+    }
+
+    func testLoadingLegacyBlogEntryDefaultsImageLayoutToLandscape() throws {
+        let snapshotData = Data(
+            """
+            {
+              "entries" : [
+                {
+                  "id" : "E0D5F1A0-1C1F-4B01-9464-6E4E4A7A9D11",
+                  "kind" : "blog",
+                  "title" : "Legacy Blog",
+                  "body" : "Saved before image layouts existed.",
+                  "blogTag" : "Reading",
+                  "happenedAt" : "2026-04-16T09:00:00Z",
+                  "createdAt" : "2026-04-16T09:00:00Z",
+                  "updatedAt" : "2026-04-16T09:00:00Z"
+                }
+              ],
+              "updatedAt" : "2026-04-16T09:00:00Z"
+            }
+            """.utf8
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let snapshot = try decoder.decode(RepositorySnapshot.self, from: snapshotData)
+
+        XCTAssertEqual(snapshot.entries.first?.blogImageLayout, .landscape)
     }
 
     @MainActor
@@ -1251,6 +1324,7 @@ final class thatDayTests: XCTestCase {
         title: String,
         body: String = "Body",
         blogTag: String? = nil,
+        blogImageLayout: BlogCardImageLayout = .landscape,
         happenedAt: Date
     ) -> EntryRecord {
         EntryRecord(
@@ -1258,6 +1332,7 @@ final class thatDayTests: XCTestCase {
             title: title,
             body: body,
             blogTag: blogTag,
+            blogImageLayout: blogImageLayout,
             happenedAt: happenedAt,
             createdAt: happenedAt,
             updatedAt: happenedAt
