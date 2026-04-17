@@ -29,6 +29,7 @@ struct JournalView: View {
                                         imageURL: store.imageURL(for: entry)
                                     )
                                 }
+                                .navigationLinkIndicatorVisibility(.hidden)
                                 .buttonStyle(.plain)
                                 .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
                                 .listRowSeparator(.hidden)

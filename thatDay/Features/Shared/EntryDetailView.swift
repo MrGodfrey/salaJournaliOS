@@ -134,9 +134,11 @@ struct EntryDetailView: View {
                             .textSelection(.enabled)
                             .accessibilityIdentifier("entryDetailBody")
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 24)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Color(.systemBackground))
         }

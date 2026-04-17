@@ -33,6 +33,7 @@ struct SearchView: View {
                                         imageURL: store.imageURL(for: entry)
                                     )
                                 }
+                                .navigationLinkIndicatorVisibility(.hidden)
                                 .buttonStyle(.plain)
                                 .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0))
                                 .listRowBackground(Color.clear)

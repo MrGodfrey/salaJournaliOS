@@ -156,6 +156,41 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testNoImageBlogDetailUsesLeadingInsetLayout() throws {
+        let app = launchApp()
+
+        app.tabBars.buttons["Blog"].tap()
+        XCTAssertTrue(app.buttons["addBlogEntryButton"].waitForExistence(timeout: 5))
+        app.buttons["addBlogEntryButton"].tap()
+
+        let titleField = app.textFields["entryTitleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.tap()
+        titleField.typeText("No Image Layout Check")
+
+        let bodyEditor = app.textViews.element(boundBy: 0)
+        XCTAssertTrue(bodyEditor.waitForExistence(timeout: 5))
+        bodyEditor.tap()
+        bodyEditor.typeText("Body paragraph one.\n\nBody paragraph two.")
+
+        app.buttons["saveEntryButton"].tap()
+
+        let createdTitle = app.staticTexts["No Image Layout Check"]
+        XCTAssertTrue(createdTitle.waitForExistence(timeout: 5))
+        createdTitle.tap()
+
+        let detailTitle = app.staticTexts["entryDetailTitle"]
+        XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(detailTitle.frame.minX, 16)
+        XCTAssertLessThanOrEqual(detailTitle.frame.minX, 28)
+
+        let detailBody = app.staticTexts["entryDetailBody"]
+        XCTAssertTrue(detailBody.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(detailBody.frame.minX, 16)
+        XCTAssertLessThanOrEqual(detailBody.frame.minX, 28)
+    }
+
+    @MainActor
     func testSettingsSheetOpensFromJournal() throws {
         let app = launchApp()
 
