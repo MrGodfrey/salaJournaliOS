@@ -10,7 +10,7 @@ struct EntryFormSections: View {
     let existingImageURL: URL?
 
     var body: some View {
-        Section("内容") {
+        Section("信息") {
             TextField("标题", text: $draft.title)
                 .accessibilityIdentifier("entryTitleField")
 
@@ -18,18 +18,16 @@ struct EntryFormSections: View {
                 .accessibilityIdentifier("entryDatePicker")
         }
 
-        Section("图片") {
-            PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                Label("从相册选择图片", systemImage: "photo.on.rectangle")
-            }
-
-            imagePreview
-        }
-
         Section("正文") {
             TextEditor(text: $draft.body)
                 .frame(minHeight: 220)
                 .accessibilityIdentifier("entryBodyEditor")
+
+            PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                Label("插入图片", systemImage: "photo.on.rectangle")
+            }
+
+            imagePreview
         }
     }
 

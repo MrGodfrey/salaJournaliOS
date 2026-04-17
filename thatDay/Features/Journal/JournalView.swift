@@ -64,6 +64,13 @@ struct JournalView: View {
                     )
                 }
             }
+            .task(id: store.entryOpenRequest?.id) {
+                guard let destination = store.consumeEntryOpenRequest(for: .journal) else {
+                    return
+                }
+
+                navigationPath = [destination]
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {

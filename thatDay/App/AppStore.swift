@@ -1,7 +1,9 @@
 import CloudKit
+import LocalAuthentication
 import Observation
 import SwiftUI
 import UIKit
+import UserNotifications
 
 enum AppTab: Hashable {
     case journal
@@ -35,15 +37,67 @@ struct SharingControllerItem: Identifiable {
     let controller: UICloudSharingController
 }
 
+enum RepositoryTransferKind: String, Sendable {
+    case export
+    case `import`
+
+    var title: String {
+        switch self {
+        case .export:
+            "导出"
+        case .import:
+            "导入"
+        }
+    }
+}
+
+struct RepositoryTransferProgress: Equatable, Sendable {
+    let kind: RepositoryTransferKind
+    let totalFiles: Int
+    let completedFiles: Int
+
+    var fractionCompleted: Double {
+        guard totalFiles > 0 else {
+            return 0
+        }
+
+        return Double(completedFiles) / Double(totalFiles)
+    }
+
+    var statusText: String {
+        "共 \(totalFiles) 个文件，已\(kind.title) \(completedFiles) 个"
+    }
+}
+
+struct ExportedArchiveItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+struct EntryOpenRequest: Identifiable, Equatable, Sendable {
+    let id = UUID()
+    let repositoryID: String
+    let entryID: UUID
+    let kind: EntryKind
+}
+
+enum SharedRepositoryRefreshTrigger: Sendable {
+    case launch
+    case foreground
+    case push
+}
+
 @MainActor
 @Observable
 final class AppStore {
-    private let repositoryStore: LocalRepositoryStore
+    private let libraryStore: RepositoryLibraryStore
     private let cloudService: any CloudRepositoryServicing
+    private let repositoryArchiveService = RepositoryArchiveService()
     private let now: () -> Date
     private let calendar: Calendar
 
     private var didLoad = false
+    private var preferences = AppPreferences()
 
     var selectedTab: AppTab = .journal
     var selectedDate: Date
@@ -56,17 +110,24 @@ final class AppStore {
     var sharingControllerItem: SharingControllerItem?
     var isBusy = false
     var alertMessage: String?
+    var entryOpenRequest: EntryOpenRequest?
+    var isAuthenticationRequired = false
+    var isAuthenticating = false
+    var transferProgress: RepositoryTransferProgress?
+    var exportedArchiveItem: ExportedArchiveItem?
 
     private(set) var entries: [EntryRecord] = []
     private(set) var repositoryDescriptor: RepositoryDescriptor = .local
+    private(set) var repositories: [RepositoryReference] = [.local]
+    private(set) var currentRepositoryID = RepositoryReference.localRepositoryID
 
     init(
-        repositoryStore: LocalRepositoryStore,
+        libraryStore: RepositoryLibraryStore,
         cloudService: any CloudRepositoryServicing,
         calendar: Calendar = .current,
         now: @escaping () -> Date = Date.init
     ) {
-        self.repositoryStore = repositoryStore
+        self.libraryStore = libraryStore
         self.cloudService = cloudService
         self.calendar = calendar
         self.now = now
@@ -78,7 +139,9 @@ final class AppStore {
 
     static func preview() -> AppStore {
         AppStore(
-            repositoryStore: LocalRepositoryStore(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("thatDay-preview", isDirectory: true)),
+            libraryStore: RepositoryLibraryStore(
+                rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("thatDay-preview", isDirectory: true)
+            ),
             cloudService: PreviewCloudRepositoryService(),
             now: { Self.referenceDate(from: ["THATDAY_REFERENCE_DATE": "2026-04-16T09:00:00Z"]) ?? Date() }
         )
@@ -102,16 +165,52 @@ final class AppStore {
         repositoryDescriptor.role.title
     }
 
+    var currentRepositoryName: String {
+        currentRepositoryReference?.displayName ?? repositoryDescriptor.defaultDisplayName
+    }
+
+    var defaultRepositoryID: String {
+        preferences.defaultRepositoryID
+    }
+
+    var isBiometricLockEnabled: Bool {
+        preferences.isBiometricLockEnabled
+    }
+
+    var isSharedUpdateNotificationEnabled: Bool {
+        preferences.isSharedUpdateNotificationEnabled
+    }
+
     var repositorySummary: String {
         if repositoryDescriptor.role == .local {
-            return "当前正在使用本地仓库。"
+            return "当前正在使用自己的本地仓库。"
         }
 
-        return "当前仓库来自 CloudKit 共享，权限为 \(repositoryDescriptor.role.title)。"
+        return "当前仓库为 \(currentRepositoryName)，权限为 \(repositoryDescriptor.role.title)。"
     }
 
     var selectedDateTitle: String {
         selectedDate.formatted(.dateTime.month(.wide).day())
+    }
+
+    var currentRepositoryReference: RepositoryReference? {
+        repositories.first { $0.id == currentRepositoryID }
+    }
+
+    var sortedRepositories: [RepositoryReference] {
+        repositories.sorted { lhs, rhs in
+            if lhs.isLocal != rhs.isLocal {
+                return lhs.isLocal
+            }
+
+            let lhsOpenedAt = lhs.lastOpenedAt ?? .distantPast
+            let rhsOpenedAt = rhs.lastOpenedAt ?? .distantPast
+            if lhsOpenedAt != rhsOpenedAt {
+                return lhsOpenedAt > rhsOpenedAt
+            }
+
+            return lhs.displayName.localizedCompare(rhs.displayName) == .orderedAscending
+        }
     }
 
     var journalSections: [JournalSection] {
@@ -180,18 +279,17 @@ final class AppStore {
         defer { isBusy = false }
 
         do {
-            repositoryDescriptor = try repositoryStore.loadDescriptor() ?? .local
-            if let snapshot = try repositoryStore.loadSnapshot() {
-                entries = snapshot.entries
-            } else {
-                entries = SampleData.makeEntries()
-                try repositoryStore.saveSnapshot(RepositorySnapshot(entries: entries, updatedAt: now()))
-            }
-
-            if repositoryDescriptor.isCloudBacked {
-                let snapshot = try await cloudService.loadSnapshot(using: repositoryDescriptor)
-                entries = snapshot.entries
-                try repositoryStore.saveSnapshot(snapshot)
+            repositories = try libraryStore.loadCatalog()
+            preferences = try libraryStore.loadPreferences()
+            let launchRepositoryID = repositories.contains(where: { $0.id == preferences.defaultRepositoryID })
+                ? preferences.defaultRepositoryID
+                : RepositoryReference.localRepositoryID
+            try await loadRepository(repositoryID: launchRepositoryID)
+            await ensureRepositorySubscriptions()
+            await refreshSharedRepositories(trigger: .launch)
+            if preferences.isBiometricLockEnabled {
+                isAuthenticationRequired = true
+                await unlockIfNeeded()
             }
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
@@ -247,7 +345,7 @@ final class AppStore {
             let entryID = editingEntry?.id ?? UUID()
             let imageReference: String?
             if let importedImageData {
-                imageReference = try repositoryStore.storeImage(
+                imageReference = try currentRepositoryStore.storeImage(
                     data: importedImageData,
                     suggestedID: entryID
                 )
@@ -307,8 +405,25 @@ final class AppStore {
         }
     }
 
+    func clearCurrentRepository() async {
+        guard canEditRepository else {
+            alertMessage = "当前仓库是只读的，不能清空内容。"
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            entries.removeAll()
+            try await persistEntries()
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
     func imageURL(for entry: EntryRecord) -> URL? {
-        repositoryStore.imageURL(for: entry.imageReference)
+        currentRepositoryStore.imageURL(for: entry.imageReference)
     }
 
     func entry(matching entryID: UUID) -> EntryRecord? {
@@ -373,7 +488,16 @@ final class AppStore {
         do {
             let snapshot = RepositorySnapshot(entries: entries, updatedAt: now())
             repositoryDescriptor = try await cloudService.saveSnapshot(snapshot, using: repositoryDescriptor)
-            try repositoryStore.saveDescriptor(repositoryDescriptor)
+            try currentRepositoryStore.saveDescriptor(repositoryDescriptor)
+            upsertRepositoryReference(
+                repositoryID: currentRepositoryID,
+                descriptor: repositoryDescriptor,
+                displayName: currentRepositoryName,
+                snapshotUpdatedAt: snapshot.updatedAt,
+                markAsOpened: true
+            )
+            try persistRepositoryCatalog()
+
             let controller = try await cloudService.makeSharingController(
                 using: repositoryDescriptor,
                 snapshot: snapshot,
@@ -400,6 +524,7 @@ final class AppStore {
             let accepted = try await cloudService.acceptShare(from: url)
             try applyAcceptedShare(accepted)
             incomingShareLink = ""
+            try await loadRepository(repositoryID: accepted.descriptor.storageIdentifier)
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
         }
@@ -412,25 +537,540 @@ final class AppStore {
         do {
             let accepted = try await cloudService.acceptShare(metadata: metadata)
             try applyAcceptedShare(accepted)
+            try await loadRepository(repositoryID: accepted.descriptor.storageIdentifier)
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
         }
     }
 
+    func switchRepository(to repositoryID: String) async {
+        guard repositoryID != currentRepositoryID else {
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            try await loadRepository(repositoryID: repositoryID)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func setDefaultRepository(_ repositoryID: String) {
+        guard repositories.contains(where: { $0.id == repositoryID }) else {
+            return
+        }
+
+        preferences.defaultRepositoryID = repositoryID
+
+        do {
+            try libraryStore.savePreferences(preferences)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func setBiometricLockEnabled(_ isEnabled: Bool) {
+        preferences.isBiometricLockEnabled = isEnabled
+
+        do {
+            try libraryStore.savePreferences(preferences)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func updateBiometricLockEnabled(_ isEnabled: Bool) async {
+        if !isEnabled {
+            setBiometricLockEnabled(false)
+            isAuthenticationRequired = false
+            return
+        }
+
+        do {
+            try await authenticateBiometrics(reason: "启用 Face ID 保护")
+            setBiometricLockEnabled(true)
+            isAuthenticationRequired = false
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+            setBiometricLockEnabled(false)
+            isAuthenticationRequired = false
+        }
+    }
+
+    func setSharedUpdateNotificationEnabled(_ isEnabled: Bool) {
+        preferences.isSharedUpdateNotificationEnabled = isEnabled
+
+        do {
+            try libraryStore.savePreferences(preferences)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func updateSharedUpdateNotificationEnabled(_ isEnabled: Bool) async {
+        if !isEnabled {
+            setSharedUpdateNotificationEnabled(false)
+            return
+        }
+
+        do {
+            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+            guard granted else {
+                alertMessage = "通知权限未开启，无法接收共享仓库更新提醒。"
+                setSharedUpdateNotificationEnabled(false)
+                return
+            }
+
+            setSharedUpdateNotificationEnabled(true)
+            await ensureRepositorySubscriptions()
+            await refreshSharedRepositories(trigger: .launch)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+            setSharedUpdateNotificationEnabled(false)
+        }
+    }
+
+    func refreshSharedRepositories(trigger: SharedRepositoryRefreshTrigger) async {
+        let sharedReferences = sortedRepositories.filter { $0.descriptor.isCloudBacked }
+        guard !sharedReferences.isEmpty else {
+            return
+        }
+
+        for reference in sharedReferences {
+            do {
+                try await refreshRepository(reference, trigger: trigger)
+            } catch {
+                if reference.id == currentRepositoryID {
+                    alertMessage = Self.userFacingMessage(for: error)
+                }
+            }
+        }
+    }
+
+    func handleNotificationRoute(_ route: NotificationEntryRoute) async {
+        if route.repositoryID != currentRepositoryID {
+            await switchRepository(to: route.repositoryID)
+        }
+
+        guard let entryID = route.entryID,
+              let entry = entry(matching: entryID) else {
+            return
+        }
+
+        routeToEntry(entry)
+    }
+
+    func exportCurrentRepository() async {
+        guard transferProgress == nil else {
+            return
+        }
+
+        transferProgress = RepositoryTransferProgress(kind: .export, totalFiles: 1, completedFiles: 0)
+        let backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "thatDay-export")
+        defer {
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        }
+
+        do {
+            let zipURL = try await repositoryArchiveService.exportArchive(
+                from: currentRepositoryStore,
+                repositoryID: currentRepositoryID,
+                repositoryName: currentRepositoryName
+            ) { [self] totalFiles, completedFiles in
+                await MainActor.run {
+                    self.transferProgress = RepositoryTransferProgress(
+                        kind: .export,
+                        totalFiles: totalFiles,
+                        completedFiles: completedFiles
+                    )
+                }
+            }
+
+            transferProgress = nil
+            exportedArchiveItem = ExportedArchiveItem(url: zipURL)
+        } catch {
+            transferProgress = nil
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func importRepositoryArchive(from zipURL: URL) async {
+        guard transferProgress == nil else {
+            return
+        }
+
+        guard canEditRepository else {
+            alertMessage = "当前仓库是只读的，不能导入内容。"
+            return
+        }
+
+        transferProgress = RepositoryTransferProgress(kind: .import, totalFiles: 1, completedFiles: 0)
+        let backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "thatDay-import")
+        defer {
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        }
+
+        do {
+            let importedSnapshot = try await repositoryArchiveService.importArchive(
+                from: zipURL,
+                into: currentRepositoryStore,
+                preserving: repositoryDescriptor
+            ) { [self] totalFiles, completedFiles in
+                await MainActor.run {
+                    self.transferProgress = RepositoryTransferProgress(
+                        kind: .import,
+                        totalFiles: totalFiles,
+                        completedFiles: completedFiles
+                    )
+                }
+            }
+
+            entries = importedSnapshot.entries
+            try await persistEntries()
+            transferProgress = nil
+        } catch {
+            transferProgress = nil
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func routeToEntry(_ entry: EntryRecord) {
+        if entry.kind == .journal {
+            selectDate(entry.happenedAt)
+            selectedTab = .journal
+        } else {
+            selectedTab = .blog
+        }
+
+        entryOpenRequest = EntryOpenRequest(
+            repositoryID: currentRepositoryID,
+            entryID: entry.id,
+            kind: entry.kind
+        )
+    }
+
+    func consumeEntryOpenRequest(for tab: AppTab) -> EntryDestination? {
+        guard let entryOpenRequest else {
+            return nil
+        }
+
+        let expectedTab: AppTab = entryOpenRequest.kind == .journal ? .journal : .blog
+        guard expectedTab == tab,
+              selectedTab == tab,
+              entryOpenRequest.repositoryID == currentRepositoryID else {
+            return nil
+        }
+
+        self.entryOpenRequest = nil
+        return .read(entryOpenRequest.entryID)
+    }
+
+    func handleScenePhaseChange(_ phase: ScenePhase) async {
+        guard phase == .active else {
+            return
+        }
+
+        guard preferences.isBiometricLockEnabled else {
+            isAuthenticationRequired = false
+            return
+        }
+
+        isAuthenticationRequired = true
+        await unlockIfNeeded()
+    }
+
+    func unlockIfNeeded() async {
+        guard preferences.isBiometricLockEnabled,
+              isAuthenticationRequired,
+              !isAuthenticating else {
+            return
+        }
+
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+
+        do {
+            try await authenticateBiometrics(reason: "打开 thatDay 需要验证")
+            isAuthenticationRequired = false
+        } catch {
+            if let authError = error as? LAError,
+               authError.code == .userCancel || authError.code == .systemCancel {
+                return
+            }
+
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    private var currentRepositoryStore: LocalRepositoryStore {
+        libraryStore.repositoryStore(for: currentRepositoryID)
+    }
+
     private func applyAcceptedShare(_ accepted: AcceptedSharedRepository) throws {
-        repositoryDescriptor = accepted.descriptor
-        entries = accepted.snapshot.entries
-        try repositoryStore.saveDescriptor(repositoryDescriptor)
+        let repositoryID = accepted.descriptor.storageIdentifier
+        let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
+        try repositoryStore.saveDescriptor(accepted.descriptor)
         try repositoryStore.saveSnapshot(accepted.snapshot)
+
+        upsertRepositoryReference(
+            repositoryID: repositoryID,
+            descriptor: accepted.descriptor,
+            displayName: accepted.displayName ?? accepted.descriptor.defaultDisplayName,
+            snapshotUpdatedAt: accepted.snapshot.updatedAt
+        )
+        try persistRepositoryCatalog()
+    }
+
+    private func loadRepository(repositoryID: String) async throws {
+        let fallbackRepositoryID = repositories.contains(where: { $0.id == repositoryID })
+            ? repositoryID
+            : RepositoryReference.localRepositoryID
+        currentRepositoryID = fallbackRepositoryID
+
+        let repositoryStore = currentRepositoryStore
+        let reference = repositoryReference(for: currentRepositoryID)
+        repositoryDescriptor = try repositoryStore.loadDescriptor() ?? reference?.descriptor ?? .local
+
+        if let snapshot = try repositoryStore.loadSnapshot() {
+            entries = snapshot.entries
+            upsertRepositoryReference(
+                repositoryID: currentRepositoryID,
+                descriptor: repositoryDescriptor,
+                displayName: reference?.displayName ?? repositoryDescriptor.defaultDisplayName,
+                snapshotUpdatedAt: snapshot.updatedAt,
+                markAsOpened: true
+            )
+        } else if currentRepositoryID == RepositoryReference.localRepositoryID {
+            entries = SampleData.makeEntries()
+            let snapshot = RepositorySnapshot(entries: entries, updatedAt: now())
+            try repositoryStore.saveDescriptor(.local)
+            try repositoryStore.saveSnapshot(snapshot)
+            repositoryDescriptor = .local
+            upsertRepositoryReference(
+                repositoryID: currentRepositoryID,
+                descriptor: .local,
+                displayName: "我的仓库",
+                snapshotUpdatedAt: snapshot.updatedAt,
+                markAsOpened: true
+            )
+        } else {
+            entries = []
+        }
+
+        if repositoryDescriptor.isCloudBacked {
+            let snapshot = try await cloudService.loadSnapshot(using: repositoryDescriptor)
+            entries = snapshot.entries
+            try repositoryStore.saveSnapshot(snapshot)
+            upsertRepositoryReference(
+                repositoryID: currentRepositoryID,
+                descriptor: repositoryDescriptor,
+                displayName: reference?.displayName ?? repositoryDescriptor.defaultDisplayName,
+                snapshotUpdatedAt: snapshot.updatedAt,
+                markAsOpened: true
+            )
+        }
+
+        try persistRepositoryCatalog()
     }
 
     private func persistEntries() async throws {
         let snapshot = RepositorySnapshot(entries: entries, updatedAt: now())
-        try repositoryStore.saveSnapshot(snapshot)
+        try currentRepositoryStore.saveSnapshot(snapshot)
 
         if repositoryDescriptor.role != .local {
             repositoryDescriptor = try await cloudService.saveSnapshot(snapshot, using: repositoryDescriptor)
-            try repositoryStore.saveDescriptor(repositoryDescriptor)
+            try currentRepositoryStore.saveDescriptor(repositoryDescriptor)
+        } else {
+            try currentRepositoryStore.saveDescriptor(.local)
+            repositoryDescriptor = .local
+        }
+
+        upsertRepositoryReference(
+            repositoryID: currentRepositoryID,
+            descriptor: repositoryDescriptor,
+            displayName: currentRepositoryName,
+            snapshotUpdatedAt: snapshot.updatedAt,
+            markAsOpened: true
+        )
+        try persistRepositoryCatalog()
+        await ensureRepositorySubscriptions()
+    }
+
+    private func repositoryReference(for repositoryID: String) -> RepositoryReference? {
+        repositories.first { $0.id == repositoryID }
+    }
+
+    private func upsertRepositoryReference(
+        repositoryID: String,
+        descriptor: RepositoryDescriptor,
+        displayName: String,
+        snapshotUpdatedAt: Date?,
+        markAsOpened: Bool = false
+    ) {
+        let normalizedName = displayName.trimmed.nilIfEmpty ?? descriptor.defaultDisplayName
+        let source: RepositorySource = repositoryID == RepositoryReference.localRepositoryID ? .local : .shared
+        let existing = repositories.first(where: { $0.id == repositoryID })
+        let updatedReference = RepositoryReference(
+            id: repositoryID,
+            displayName: source == .local ? "我的仓库" : normalizedName,
+            descriptor: descriptor,
+            source: source,
+            lastKnownSnapshotUpdatedAt: snapshotUpdatedAt,
+            subscribedAt: existing?.subscribedAt ?? now(),
+            lastOpenedAt: markAsOpened ? now() : existing?.lastOpenedAt
+        )
+
+        if let index = repositories.firstIndex(where: { $0.id == repositoryID }) {
+            repositories[index] = updatedReference
+        } else {
+            repositories.append(updatedReference)
+        }
+    }
+
+    private func persistRepositoryCatalog() throws {
+        repositories = sortedRepositories
+        try libraryStore.saveCatalog(repositories)
+    }
+
+    private func ensureRepositorySubscriptions() async {
+        guard preferences.isSharedUpdateNotificationEnabled else {
+            return
+        }
+
+        for reference in repositories where reference.descriptor.isCloudBacked {
+            do {
+                try await cloudService.ensureRepositorySubscription(using: reference.descriptor)
+            } catch {
+                if reference.id == currentRepositoryID {
+                    alertMessage = Self.userFacingMessage(for: error)
+                }
+            }
+        }
+    }
+
+    private func refreshRepository(_ reference: RepositoryReference, trigger: SharedRepositoryRefreshTrigger) async throws {
+        let repositoryStore = libraryStore.repositoryStore(for: reference.id)
+        let previousSnapshot = try repositoryStore.loadSnapshot()
+        let remoteSnapshot = try await cloudService.loadSnapshot(using: reference.descriptor)
+        let previousUpdatedAt = reference.lastKnownSnapshotUpdatedAt ?? previousSnapshot?.updatedAt
+        let shouldNotify = previousUpdatedAt != nil && remoteSnapshot.updatedAt > (previousUpdatedAt ?? .distantPast)
+
+        try repositoryStore.saveDescriptor(reference.descriptor)
+        try repositoryStore.saveSnapshot(remoteSnapshot)
+
+        upsertRepositoryReference(
+            repositoryID: reference.id,
+            descriptor: reference.descriptor,
+            displayName: reference.displayName,
+            snapshotUpdatedAt: remoteSnapshot.updatedAt,
+            markAsOpened: reference.id == currentRepositoryID
+        )
+        try persistRepositoryCatalog()
+
+        if reference.id == currentRepositoryID {
+            repositoryDescriptor = reference.descriptor
+            entries = remoteSnapshot.entries
+        }
+
+        guard shouldNotify,
+              preferences.isSharedUpdateNotificationEnabled,
+              let notification = makeSharedRepositoryNotification(
+                for: reference,
+                previousEntries: previousSnapshot?.entries ?? [],
+                latestEntries: remoteSnapshot.entries
+              ) else {
+            return
+        }
+
+        if trigger != .launch {
+            await scheduleLocalNotification(notification)
+        }
+    }
+
+    private func makeSharedRepositoryNotification(
+        for reference: RepositoryReference,
+        previousEntries: [EntryRecord],
+        latestEntries: [EntryRecord]
+    ) -> RepositoryUpdateNotification? {
+        let previousByID = Dictionary(uniqueKeysWithValues: previousEntries.map { ($0.id, $0) })
+        let changedEntries = latestEntries.filter { entry in
+            guard let previousEntry = previousByID[entry.id] else {
+                return true
+            }
+
+            return previousEntry.updatedAt != entry.updatedAt ||
+                previousEntry.title != entry.title ||
+                previousEntry.body != entry.body ||
+                previousEntry.imageReference != entry.imageReference
+        }
+        .sorted { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.createdAt > rhs.createdAt
+        }
+
+        guard let firstEntry = changedEntries.first else {
+            return nil
+        }
+
+        let title: String
+        let body: String
+        if changedEntries.count == 1 {
+            title = "\(reference.displayName) 有更新"
+            body = firstEntry.title
+        } else {
+            title = "\(reference.displayName) 有 \(changedEntries.count) 条更新"
+            body = "\(firstEntry.title) 等 \(changedEntries.count) 篇内容"
+        }
+
+        return RepositoryUpdateNotification(
+            repositoryID: reference.id,
+            entryID: firstEntry.id,
+            title: title,
+            body: body
+        )
+    }
+
+    private func scheduleLocalNotification(_ notification: RepositoryUpdateNotification) async {
+        let content = UNMutableNotificationContent()
+        content.title = notification.title
+        content.body = notification.body
+        content.sound = .default
+        content.userInfo = [
+            LocalNotificationPayload.repositoryIDKey: notification.repositoryID,
+            LocalNotificationPayload.entryIDKey: notification.entryID.uuidString
+        ]
+
+        let request = UNNotificationRequest(
+            identifier: "repository-update-\(notification.repositoryID)-\(notification.entryID.uuidString)",
+            content: content,
+            trigger: nil
+        )
+
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    private func authenticateBiometrics(reason: String) async throws {
+        let context = LAContext()
+        context.localizedFallbackTitle = "使用密码"
+
+        var evaluationError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &evaluationError) else {
+            throw evaluationError ?? LAError(.biometryNotAvailable)
+        }
+
+        _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
+            context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
+                if success {
+                    continuation.resume(returning: true)
+                } else {
+                    continuation.resume(throwing: error ?? LAError(.authenticationFailed))
+                }
+            }
         }
     }
 
@@ -449,6 +1089,13 @@ final class AppStore {
     }
 }
 
+private struct RepositoryUpdateNotification {
+    let repositoryID: String
+    let entryID: UUID
+    let title: String
+    let body: String
+}
+
 private struct PreviewCloudRepositoryService: CloudRepositoryServicing {
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot {
         RepositorySnapshot(entries: SampleData.makeEntries())
@@ -463,6 +1110,8 @@ private struct PreviewCloudRepositoryService: CloudRepositoryServicing {
     func shareURL(using descriptor: RepositoryDescriptor, snapshot: RepositorySnapshot) async throws -> URL {
         URL(string: "https://www.icloud.com/share/preview")!
     }
+
+    func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws {}
 
     @MainActor
     func makeSharingController(
@@ -479,7 +1128,8 @@ private struct PreviewCloudRepositoryService: CloudRepositoryServicing {
     func acceptShare(from url: URL) async throws -> AcceptedSharedRepository {
         AcceptedSharedRepository(
             descriptor: RepositoryDescriptor(zoneName: "preview-zone", zoneOwnerName: "_owner_", shareRecordName: "preview-share", role: .viewer),
-            snapshot: RepositorySnapshot(entries: SampleData.makeEntries())
+            snapshot: RepositorySnapshot(entries: SampleData.makeEntries()),
+            displayName: "共享仓库"
         )
     }
 

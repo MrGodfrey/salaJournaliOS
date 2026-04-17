@@ -6,6 +6,7 @@ protocol CloudRepositoryServicing {
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot
     func saveSnapshot(_ snapshot: RepositorySnapshot, using descriptor: RepositoryDescriptor) async throws -> RepositoryDescriptor
     func shareURL(using descriptor: RepositoryDescriptor, snapshot: RepositorySnapshot) async throws -> URL
+    func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws
     @MainActor
     func makeSharingController(
         using descriptor: RepositoryDescriptor,
@@ -19,6 +20,7 @@ protocol CloudRepositoryServicing {
 struct AcceptedSharedRepository: Sendable {
     var descriptor: RepositoryDescriptor
     var snapshot: RepositorySnapshot
+    var displayName: String?
 }
 
 enum CloudRepositoryError: LocalizedError {
@@ -143,6 +145,28 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         return url
     }
 
+    func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws {
+        guard let zoneID = descriptor.zoneID else {
+            return
+        }
+
+        let database = database(for: descriptor.role)
+        let subscription = CKRecordZoneSubscription(zoneID: zoneID, subscriptionID: subscriptionID(for: descriptor))
+        let notificationInfo = CKSubscription.NotificationInfo()
+        notificationInfo.shouldSendContentAvailable = true
+        subscription.notificationInfo = notificationInfo
+
+        let result = try await database.modifySubscriptions(saving: [subscription], deleting: [])
+        switch result.saveResults[subscription.subscriptionID] {
+        case .success:
+            return
+        case .failure(let error):
+            throw error
+        case nil:
+            throw CloudRepositoryError.shareUnavailable
+        }
+    }
+
     @MainActor
     func makeSharingController(
         using descriptor: RepositoryDescriptor,
@@ -172,6 +196,11 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         let shareRecord = metadata.share
         let permission = shareRecord.currentUserParticipant?.permission ?? .readOnly
         let role: RepositoryRole = permission == .readWrite ? .editor : .viewer
+        let ownerDisplayName = metadata.ownerIdentity.nameComponents.flatMap { components in
+            PersonNameComponentsFormatter.localizedString(from: components, style: .default, options: [])
+                .trimmed
+                .nilIfEmpty
+        }
         let descriptor = RepositoryDescriptor(
             zoneName: shareRecord.recordID.zoneID.zoneName,
             zoneOwnerName: shareRecord.recordID.zoneID.ownerName,
@@ -179,7 +208,11 @@ final class CloudRepositoryService: CloudRepositoryServicing {
             role: role
         )
         let snapshot = try await loadSnapshot(using: descriptor)
-        return AcceptedSharedRepository(descriptor: descriptor, snapshot: snapshot)
+        return AcceptedSharedRepository(
+            descriptor: descriptor,
+            snapshot: snapshot,
+            displayName: ownerDisplayName.map { "\($0) 的共享仓库" } ?? descriptor.defaultDisplayName
+        )
     }
 
     private func database(for role: RepositoryRole) -> CKDatabase {
@@ -290,6 +323,10 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         }
 
         return try Data(contentsOf: url)
+    }
+
+    private func subscriptionID(for descriptor: RepositoryDescriptor) -> String {
+        "repository-updates-\(descriptor.storageIdentifier)"
     }
 }
 

@@ -41,6 +41,17 @@ struct ContentView: View {
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
+        .overlay {
+            if store.isAuthenticationRequired {
+                AppLockOverlay(
+                    isAuthenticating: store.isAuthenticating
+                ) {
+                    Task {
+                        await store.unlockIfNeeded()
+                    }
+                }
+            }
+        }
         .sheet(item: $store.editorSession) { session in
             EntryEditorView(
                 store: store,
@@ -72,4 +83,39 @@ struct ContentView: View {
     ContentView(
         store: AppStore.preview()
     )
+}
+
+private struct AppLockOverlay: View {
+    let isAuthenticating: Bool
+    let unlockAction: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color(.systemBackground)
+                .ignoresSafeArea()
+
+            VStack(spacing: 20) {
+                Image(systemName: "faceid")
+                    .font(.system(size: 44, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                VStack(spacing: 8) {
+                    Text("Face ID 已开启")
+                        .font(.title3.bold())
+
+                    Text("验证后才能查看当前仓库内容。")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+
+                Button(isAuthenticating ? "验证中..." : "重新验证") {
+                    unlockAction()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isAuthenticating)
+            }
+            .padding(24)
+        }
+        .transition(.opacity)
+    }
 }

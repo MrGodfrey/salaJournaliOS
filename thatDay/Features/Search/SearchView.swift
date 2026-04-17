@@ -58,6 +58,7 @@ struct SearchView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Search")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: EntryDestination.self) { destination in
                 if let entry = store.entry(matching: destination.entryID) {
                     EntryDetailView(
@@ -69,6 +70,16 @@ struct SearchView: View {
                         "这篇文章已经不存在",
                         systemImage: "doc.text.magnifyingglass"
                     )
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        store.presentSettings()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityIdentifier("searchOpenSettingsButton")
                 }
             }
         }

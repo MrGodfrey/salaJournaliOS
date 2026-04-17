@@ -86,6 +86,40 @@ struct LocalRepositoryStore {
         return imagesURL.appendingPathComponent(value)
     }
 
+    func exportableFileURLs() throws -> [URL] {
+        var files: [URL] = []
+
+        if FileManager.default.fileExists(atPath: archiveURL.path) {
+            files.append(archiveURL)
+        }
+
+        if FileManager.default.fileExists(atPath: descriptorURL.path) {
+            files.append(descriptorURL)
+        }
+
+        if FileManager.default.fileExists(atPath: imagesURL.path) {
+            let enumerator = FileManager.default.enumerator(
+                at: imagesURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+
+            while let url = enumerator?.nextObject() as? URL {
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+                if values.isRegularFile == true {
+                    files.append(url)
+                }
+            }
+        }
+
+        return files.sorted { $0.path < $1.path }
+    }
+
+    func resetContents() throws {
+        try reset()
+        try ensureDirectories()
+    }
+
     func reset() throws {
         guard FileManager.default.fileExists(atPath: rootURL.path) else {
             return

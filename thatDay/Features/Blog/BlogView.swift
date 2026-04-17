@@ -36,6 +36,7 @@ struct BlogView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Blog")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: EntryDestination.self) { destination in
                 if let entry = store.entry(matching: destination.entryID) {
                     EntryDetailView(
@@ -48,6 +49,23 @@ struct BlogView: View {
                         systemImage: "doc.text.magnifyingglass"
                     )
                 }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        store.presentSettings()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityIdentifier("blogOpenSettingsButton")
+                }
+            }
+            .task(id: store.entryOpenRequest?.id) {
+                guard let destination = store.consumeEntryOpenRequest(for: .blog) else {
+                    return
+                }
+
+                navigationPath = [destination]
             }
             .overlay(alignment: .bottomTrailing) {
                 Button {

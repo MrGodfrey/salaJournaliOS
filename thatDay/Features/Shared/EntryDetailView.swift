@@ -123,7 +123,7 @@ struct EntryDetailView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("entryDetailTitle")
 
-                        Text(entry.timelineTitle)
+                        Text(entry.cardDateTitle)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 

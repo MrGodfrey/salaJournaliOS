@@ -130,14 +130,23 @@ struct CalendarView: View {
                 }
                 .padding(20)
             }
-            .navigationTitle("Calendar")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .principal) {
                     Button("NOW") {
                         store.returnToToday()
                     }
                     .font(.footnote.bold())
                     .accessibilityIdentifier("calendarNowButton")
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        store.presentSettings()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityIdentifier("calendarOpenSettingsButton")
                 }
             }
             .sheet(isPresented: $isShowingMonthPicker) {

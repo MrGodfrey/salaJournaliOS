@@ -1,25 +1,29 @@
 import CloudKit
 import Combine
 import SwiftUI
+import UserNotifications
 
 @main
 struct thatDayApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store: AppStore
     @StateObject private var cloudShareDeliveryCenter = CloudShareDeliveryCenter.shared
+    @StateObject private var repositoryRemoteChangeCenter = RepositoryRemoteChangeCenter.shared
+    @StateObject private var notificationRouteCenter = NotificationRouteCenter.shared
 
     init() {
         let processInfo = ProcessInfo.processInfo
-        let repositoryStore = LocalRepositoryStore.live(processInfo: processInfo)
+        let libraryStore = RepositoryLibraryStore.live(processInfo: processInfo)
 
         if processInfo.environment["THATDAY_RESET_STORAGE"] == "1" {
-            try? repositoryStore.reset()
+            try? FileManager.default.removeItem(at: libraryStore.rootURL)
         }
 
         let referenceDate = AppStore.referenceDate(from: processInfo.environment)
         _store = State(
             initialValue: AppStore(
-                repositoryStore: repositoryStore,
+                libraryStore: libraryStore,
                 cloudService: CloudRepositoryService(
                     containerIdentifier: processInfo.environment["THATDAY_CLOUDKIT_CONTAINER"] ?? "iCloud.yu.thatDay"
                 ),
@@ -36,11 +40,41 @@ struct thatDayApp: App {
                         await store.acceptShare(metadata: metadata)
                     }
                 }
+                .task(id: repositoryRemoteChangeCenter.deliverySequence) {
+                    let pendingUserInfos = repositoryRemoteChangeCenter.drainPendingUserInfos()
+                    guard !pendingUserInfos.isEmpty else {
+                        return
+                    }
+
+                    await store.refreshSharedRepositories(trigger: .push)
+                }
+                .task(id: notificationRouteCenter.deliverySequence) {
+                    for route in notificationRouteCenter.drainPendingRoutes() {
+                        await store.handleNotificationRoute(route)
+                    }
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    Task {
+                        await store.handleScenePhaseChange(newPhase)
+                        if newPhase == .active {
+                            await store.refreshSharedRepositories(trigger: .foreground)
+                        }
+                    }
+                }
         }
     }
 }
 
-final class AppDelegate: NSObject, UIApplicationDelegate {
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        application.registerForRemoteNotifications()
+        return true
+    }
+
     func application(
         _ application: UIApplication,
         configurationForConnecting connectingSceneSession: UISceneSession,
@@ -56,6 +90,37 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
     ) {
         deliver(cloudKitShareMetadata)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Task { @MainActor in
+            RepositoryRemoteChangeCenter.shared.enqueue(userInfo)
+            completionHandler(.newData)
+        }
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        guard let route = LocalNotificationPayload.route(from: response.notification) else {
+            return
+        }
+
+        await MainActor.run {
+            NotificationRouteCenter.shared.enqueue(route)
+        }
     }
 
     private func deliver(_ metadata: CKShare.Metadata) {

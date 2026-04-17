@@ -108,10 +108,10 @@ final class thatDayTests: XCTestCase {
     @MainActor
     func testSavingBlogEntryPersistsToLocalStore() async throws {
         let storageRoot = makeTempDirectory()
-        let repositoryStore = LocalRepositoryStore(rootURL: storageRoot)
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
         let cloudService = MockCloudRepositoryService()
         let store = AppStore(
-            repositoryStore: repositoryStore,
+            libraryStore: libraryStore,
             cloudService: cloudService,
             now: { self.fixtureDate("2026-04-16T09:00:00Z") }
         )
@@ -131,20 +131,37 @@ final class thatDayTests: XCTestCase {
         XCTAssertTrue(didSave)
 
         let reloadedStore = AppStore(
-            repositoryStore: repositoryStore,
+            libraryStore: libraryStore,
             cloudService: cloudService,
             now: { self.fixtureDate("2026-04-16T09:00:00Z") }
         )
         await reloadedStore.loadIfNeeded()
 
         XCTAssertTrue(reloadedStore.blogEntries.contains(where: { $0.title == "A New Persisted Blog" }))
+        XCTAssertEqual(reloadedStore.currentRepositoryID, RepositoryReference.localRepositoryID)
     }
 
     @MainActor
-    func testAcceptingShareLinkReplacesEntriesAndLocksViewerRepository() async throws {
+    func testAcceptingShareKeepsLocalRepositoryAndAddsSharedRepository() async throws {
         let storageRoot = makeTempDirectory()
-        let repositoryStore = LocalRepositoryStore(rootURL: storageRoot)
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let localEntry = makeEntry(title: "Local Journal", happenedAt: fixtureDate("2026-04-16T09:00:00Z"))
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(RepositorySnapshot(entries: [localEntry], updatedAt: fixtureDate("2026-04-16T09:00:00Z")))
+
         let cloudService = MockCloudRepositoryService()
+        let sharedSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    kind: .journal,
+                    title: "Shared Journal",
+                    body: "Read only entry.",
+                    happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+                )
+            ],
+            updatedAt: fixtureDate("2026-04-16T09:00:00Z")
+        )
         cloudService.acceptedSharedRepository = AcceptedSharedRepository(
             descriptor: RepositoryDescriptor(
                 zoneName: "shared-zone",
@@ -152,21 +169,13 @@ final class thatDayTests: XCTestCase {
                 shareRecordName: "shared-record",
                 role: .viewer
             ),
-            snapshot: RepositorySnapshot(
-                entries: [
-                    EntryRecord(
-                        kind: .journal,
-                        title: "Shared Journal",
-                        body: "Read only entry.",
-                        happenedAt: fixtureDate("2026-04-16T09:00:00Z")
-                    )
-                ],
-                updatedAt: fixtureDate("2026-04-16T09:00:00Z")
-            )
+            snapshot: sharedSnapshot,
+            displayName: "共享仓库"
         )
+        cloudService.loadedSnapshot = sharedSnapshot
 
         let store = AppStore(
-            repositoryStore: repositoryStore,
+            libraryStore: libraryStore,
             cloudService: cloudService,
             now: { self.fixtureDate("2026-04-16T09:00:00Z") }
         )
@@ -178,26 +187,150 @@ final class thatDayTests: XCTestCase {
         XCTAssertEqual(store.repositoryDescriptor.role, .viewer)
         XCTAssertFalse(store.canEditRepository)
         XCTAssertEqual(store.entries.first?.title, "Shared Journal")
+        XCTAssertEqual(store.sortedRepositories.count, 2)
 
-        let reloadedStore = AppStore(
-            repositoryStore: repositoryStore,
-            cloudService: cloudService,
-            now: { self.fixtureDate("2026-04-16T09:00:00Z") }
-        )
-        await reloadedStore.loadIfNeeded()
-
-        XCTAssertEqual(reloadedStore.repositoryDescriptor.role, .viewer)
+        await store.switchRepository(to: RepositoryReference.localRepositoryID)
+        XCTAssertEqual(store.repositoryDescriptor.role, .local)
+        XCTAssertEqual(store.entries.first?.title, "Local Journal")
     }
 
     @MainActor
-    private func makeStore(now: Date, entries: [EntryRecord]? = nil) throws -> AppStore {
-        let repositoryStore = LocalRepositoryStore(rootURL: makeTempDirectory())
+    func testDefaultRepositoryLoadsChosenSharedRepositoryOnLaunch() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let sharedSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    kind: .blog,
+                    title: "Shared Blog",
+                    body: "Cloud entry.",
+                    happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+                )
+            ],
+            updatedAt: fixtureDate("2026-04-16T09:00:00Z")
+        )
+
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(RepositorySnapshot(
+            entries: [makeEntry(title: "Local Entry", happenedAt: fixtureDate("2026-04-15T09:00:00Z"))],
+            updatedAt: fixtureDate("2026-04-15T09:00:00Z")
+        ))
+
+        let sharedStore = libraryStore.repositoryStore(for: sharedDescriptor.storageIdentifier)
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(sharedSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: sharedDescriptor.storageIdentifier,
+                displayName: "共享仓库",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: sharedSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: sharedDescriptor.storageIdentifier,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = sharedSnapshot
+
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T09:00:00Z") }
+        )
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.currentRepositoryID, sharedDescriptor.storageIdentifier)
+        XCTAssertEqual(store.entries.first?.title, "Shared Blog")
+        XCTAssertEqual(store.repositoryDescriptor.role, .viewer)
+    }
+
+    func testRepositoryArchiveRoundTripRestoresSnapshot() async throws {
+        let rootURL = makeTempDirectory()
+        let sourceStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("source", isDirectory: true))
+        let destinationStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("destination", isDirectory: true))
+        let snapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    kind: .journal,
+                    title: "Export Me",
+                    body: "Archive body",
+                    happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+                )
+            ],
+            updatedAt: fixtureDate("2026-04-16T09:00:00Z")
+        )
+
+        try sourceStore.saveDescriptor(.local)
+        try sourceStore.saveSnapshot(snapshot)
+        try sourceStore.storeImage(data: Data([0x01, 0x02, 0x03]), suggestedID: snapshot.entries[0].id)
+
+        let service = RepositoryArchiveService()
+        let zipURL = try await service.exportArchive(
+            from: sourceStore,
+            repositoryID: RepositoryReference.localRepositoryID,
+            repositoryName: "My Repo"
+        ) { _, _ in }
+
+        let importedSnapshot = try await service.importArchive(
+            from: zipURL,
+            into: destinationStore,
+            preserving: .local
+        ) { _, _ in }
+
+        XCTAssertEqual(importedSnapshot.entries.map(\.title), ["Export Me"])
+        XCTAssertNotNil(try destinationStore.exportableFileURLs().first(where: { $0.lastPathComponent.hasSuffix(".jpg") }))
+    }
+
+    @MainActor
+    func testClearingCurrentRepositoryPersistsEmptySnapshot() async throws {
+        let storageRoot = makeTempDirectory()
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: [makeEntry(title: "To Delete", happenedAt: fixtureDate("2026-04-16T09:00:00Z"))],
+            rootURL: storageRoot
+        )
+
+        await store.loadIfNeeded()
+        await store.clearCurrentRepository()
+
+        XCTAssertTrue(store.entries.isEmpty)
+
+        let reloadedStore = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            rootURL: storageRoot
+        )
+        await reloadedStore.loadIfNeeded()
+
+        XCTAssertTrue(reloadedStore.entries.isEmpty)
+    }
+
+    @MainActor
+    private func makeStore(now: Date, entries: [EntryRecord]? = nil, rootURL: URL? = nil) throws -> AppStore {
+        let libraryRoot = rootURL ?? makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: libraryRoot)
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        try localStore.saveDescriptor(.local)
         if let entries {
-            try repositoryStore.saveSnapshot(RepositorySnapshot(entries: entries, updatedAt: now))
+            try localStore.saveSnapshot(RepositorySnapshot(entries: entries, updatedAt: now))
         }
 
         return AppStore(
-            repositoryStore: repositoryStore,
+            libraryStore: libraryStore,
             cloudService: MockCloudRepositoryService(),
             now: { now }
         )
@@ -260,6 +393,8 @@ private final class MockCloudRepositoryService: CloudRepositoryServicing {
     func shareURL(using descriptor: RepositoryDescriptor, snapshot: RepositorySnapshot) async throws -> URL {
         URL(string: "https://www.icloud.com/share/mock-share")!
     }
+
+    func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws {}
 
     @MainActor
     func makeSharingController(

@@ -79,4 +79,42 @@ struct RepositoryDescriptor: Codable, Hashable, Sendable {
 
         return CKRecordZone.ID(zoneName: zoneName, ownerName: zoneOwnerName)
     }
+
+    var storageIdentifier: String {
+        guard isCloudBacked else {
+            return RepositoryReference.localRepositoryID
+        }
+
+        let rawValue = [zoneOwnerName, zoneName, shareRecordName]
+            .compactMap(\.self)
+            .joined(separator: "-")
+        let normalized = rawValue.lowercased().map { character -> Character in
+            switch character {
+            case "a"..."z", "0"..."9":
+                return character
+            default:
+                return "-"
+            }
+        }
+
+        let trimmed = String(normalized)
+            .replacingOccurrences(of: "--+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+
+        return "shared-\(trimmed.nilIfEmpty ?? UUID().uuidString.lowercased())"
+    }
+
+    var defaultDisplayName: String {
+        guard isCloudBacked else {
+            return "我的仓库"
+        }
+
+        guard let ownerName = zoneOwnerName?.trimmed.nilIfEmpty,
+              ownerName != CKCurrentUserDefaultName,
+              ownerName != "_defaultOwner_" else {
+            return "共享仓库"
+        }
+
+        return "共享仓库 · \(ownerName)"
+    }
 }

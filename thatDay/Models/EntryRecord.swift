@@ -73,7 +73,7 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
     }
 
     var cardDateTitle: String {
-        "\(weekdayTitle) · \(timelineTitle)"
+        Self.cardDateFormatter.string(from: happenedAt)
     }
 
     var searchableText: String {
@@ -81,4 +81,12 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
             .joined(separator: " ")
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
+
+    private static let cardDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.calendar = .current
+        formatter.dateFormat = "EEEE, M/d/yyyy"
+        return formatter
+    }()
 }

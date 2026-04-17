@@ -5,13 +5,12 @@ struct EntryCardView: View {
     let imageURL: URL?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cover
-            VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text(entry.title)
                     .font(.headline)
                     .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
 
                 Text(entry.summary)
                     .font(.subheadline)
@@ -22,8 +21,13 @@ struct EntryCardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let imageURL {
+                thumbnail(for: imageURL)
+            }
         }
+        .padding(16)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
@@ -34,44 +38,26 @@ struct EntryCardView: View {
     }
 
     @ViewBuilder
-    private var cover: some View {
-        if let imageURL {
-            AsyncImage(url: imageURL) { phase in
-                switch phase {
-                case .empty:
-                    placeholder
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .failure:
-                    placeholder
-                @unknown default:
-                    placeholder
-                }
+    private func thumbnail(for imageURL: URL) -> some View {
+        AsyncImage(url: imageURL) { phase in
+            switch phase {
+            case .empty:
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(.tertiarySystemGroupedBackground))
+                    .overlay {
+                        ProgressView()
+                    }
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFill()
+            case .failure:
+                EmptyView()
+            @unknown default:
+                EmptyView()
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 180)
-            .clipped()
-        } else {
-            placeholder
-                .frame(height: 140)
         }
-    }
-
-    private var placeholder: some View {
-        ZStack {
-            LinearGradient(
-                colors: entry.kind == .journal
-                    ? [Color.teal.opacity(0.9), Color.blue.opacity(0.6)]
-                    : [Color.orange.opacity(0.85), Color.pink.opacity(0.65)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            Image(systemName: entry.kind.systemImage)
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
-        }
+        .frame(width: 92, height: 92)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
