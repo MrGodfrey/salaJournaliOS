@@ -171,6 +171,26 @@ final class thatDayTests: XCTestCase {
     }
 
     @MainActor
+    func testWrittenWordCountUsesKAbbreviationAfterOneThousandWords() async throws {
+        let largeBody = Array(repeating: "word", count: 1_098).joined(separator: " ")
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: [
+                makeEntry(
+                    title: "Big Count",
+                    body: largeBody,
+                    happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+                )
+            ]
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.writtenWordCount, 1_100)
+        XCTAssertEqual(store.formattedWrittenWordCount, "1.1K")
+    }
+
+    @MainActor
     func testDeletingBlogTagReassignsEntriesAndPersists() async throws {
         let storageRoot = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
@@ -222,6 +242,17 @@ final class thatDayTests: XCTestCase {
 
         XCTAssertEqual(reloadedStore.blogTags, ["Trip", "note"])
         XCTAssertEqual(reloadedStore.blogEntries.compactMap(\.blogTag), ["Trip", "Trip"])
+    }
+
+    @MainActor
+    func testOpeningBlogTagSwitchesToBlogTabAndAppliesFilter() async throws {
+        let store = try makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
+        await store.loadIfNeeded()
+
+        store.openBlog(tag: "Trip")
+
+        XCTAssertEqual(store.selectedTab, .blog)
+        XCTAssertEqual(store.selectedBlogTag, "Trip")
     }
 
     func testStoreImageCompressesImportedPhotoBelow100KB() throws {

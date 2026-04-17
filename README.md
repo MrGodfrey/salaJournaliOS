@@ -76,7 +76,7 @@
 | 想看同一天历年的记录 | `Journal` 按“同月同日”聚合文章，按年份倒序展示 |
 | 不是所有内容都适合进入 Journal | 提供独立 `Blog` 列表，Blog 不进入 `Journal / Calendar`，但会进入搜索 |
 | 想给 Blog 分类型并按类型查看 | Blog 支持标签显示和顶部标签筛选，标签可在 `Settings` 里增删、排序 |
-| 想在 Calendar 一眼看到这个月写了多少 | `Calendar` 上方显示月历，下方显示 `Journaled Days / Blogs / Written` 三张统计卡片 |
+| 想在 Calendar 一眼看到这个月写了多少 | `Calendar` 上方显示月历，下方显示 `Journaled Days / Blogs / Written` 三张统计卡片，并补充 Blog 标签统计入口 |
 | 想统一查 Journal 和 Blog | `Search` 对两类内容统一检索，空查询不返回结果 |
 | 一台设备上可能有多座仓库 | 支持本地仓库、共享仓库、默认仓库切换和最近打开排序 |
 | 想备份、迁移或恢复数据 | 支持当前仓库导出 ZIP、导入 ZIP、清空当前仓库 |
@@ -140,6 +140,8 @@
 - 顶部工具栏提供 `Today` 回到今天和 `Settings`
 - 有 Journal 的日期会显示打点
 - `Journaled Days` 卡片统计 Journal 篇数，`Blogs` 卡片统计 Blog 篇数，`Written` 卡片统计全部 Journal + Blog 的总字数
+- `Written` 在超过 `1000` 字后会显示为 `1.1K` 这一类缩写格式
+- 三张统计卡片下方会显示当前仓库所有 Blog 标签及文章数，标签保持原始写法；点按后会直接跳到 `Blog` 对应标签筛选结果
 - 选中某一天后返回对应 Journal 上下文
 - 日历卡片内边距比上一版更紧，月历内容会更贴近卡片边框
 

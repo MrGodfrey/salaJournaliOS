@@ -264,3 +264,32 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testCalendarMonthPickerAndTodayReturnToCurrentMonth -only-testing:thatDayUITests/thatDayUITests/testBlogTagFilterShowsOnlyMatchingPosts`
     - UI 测试 `2/2` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-10-59-+0800.xcresult`
+
+## 2026-04-17 18:21
+
+- 调整 Calendar 统计区：
+  - 移除 `Journaled / Blogs / Written` 三张统计卡片里的图标
+  - `Written` 在字数超过 `1000` 后改为 `1.1K` 这一类缩写格式，不再在五位数时直接铺满数字
+- 在三张统计卡片下方新增 Blog 标签统计区：
+  - 标签保持仓库里的原始写法，不做全大写转换
+  - 每个标签显示对应 Blog 文章数量
+  - 点按标签统计后会切换到 `Blog` tab，并直接带上对应标签筛选
+- 状态与测试补充：
+  - Blog 标签筛选状态上提到 `AppStore`，让 `Calendar` 和 `Blog` 共用同一份标签选择
+  - 新增单元测试覆盖字数缩写和标签跳转状态
+  - 新增 UI 测试覆盖从 `Calendar` 标签统计跳转到 `Blog` 标签筛选
+- `README.md` 已同步更新：
+  - 补充 Calendar 标签统计入口
+  - 补充 `Written` 的缩写显示规则
+
+## 2026-04-17 18:26
+
+- 补充测试收口：
+  - `Calendar` 标签统计的 UI 测试在横屏下需要先下滑到统计区，因此为该用例补上滚动步骤
+- 验证记录：
+  - `xcodebuild clean test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `29/29` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Run-thatDay-2026.04.17_18-23-29-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testBlogTagFilterShowsOnlyMatchingPosts -only-testing:thatDayUITests/thatDayUITests/testCalendarTagStatisticOpensBlogWithMatchingFilter`
+    - UI 测试 `2/2` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-25-35-+0800.xcresult`

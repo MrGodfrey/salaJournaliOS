@@ -109,6 +109,7 @@ final class AppStore {
     var selectedDate: Date
     var displayedMonth: Date
     var searchText = ""
+    var selectedBlogTag: String?
     var incomingShareLink = ""
     var shareAccessOption: ShareAccessOption = .viewOnly
     var editorSession: EntryEditorSession?
@@ -581,6 +582,11 @@ final class AppStore {
         selectedTab = .journal
     }
 
+    func openBlog(tag: String? = nil) {
+        selectedBlogTag = matchedBlogTag(for: tag)
+        selectedTab = .blog
+    }
+
     func previousMonth() {
         displayedMonth = calendar.date(byAdding: .month, value: -1, to: displayedMonth) ?? displayedMonth
     }
@@ -988,12 +994,14 @@ final class AppStore {
     private func applySnapshot(_ snapshot: RepositorySnapshot) {
         let normalizedTags = RepositorySnapshot.normalizedBlogTags(snapshot.blogTags, entries: snapshot.entries)
         blogTags = normalizedTags
+        selectedBlogTag = matchedBlogTag(for: selectedBlogTag, availableTags: normalizedTags)
         entries = normalizedEntries(snapshot.entries, using: normalizedTags)
     }
 
     private func normalizeRepositoryState() {
         let normalizedTags = RepositorySnapshot.normalizedBlogTags(blogTags, entries: entries)
         blogTags = normalizedTags
+        selectedBlogTag = matchedBlogTag(for: selectedBlogTag, availableTags: normalizedTags)
         entries = normalizedEntries(entries, using: normalizedTags)
     }
 
@@ -1021,6 +1029,17 @@ final class AppStore {
         }
 
         return Self.defaultBlogTag(in: availableTags)
+    }
+
+    private func matchedBlogTag(for rawTag: String?, availableTags: [String]? = nil) -> String? {
+        guard let tag = rawTag?.trimmed.nilIfEmpty else {
+            return nil
+        }
+
+        let tags = availableTags ?? blogTags
+        return tags.first(where: {
+            $0.compare(tag, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        })
     }
 
     private func persistCurrentRepositoryMutation(previousEntries: [EntryRecord], previousBlogTags: [String]) async {
@@ -1337,7 +1356,7 @@ final class AppStore {
         let formatter = NumberFormatter()
         formatter.locale = AppLanguage.locale
         formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = value >= 10_000 ? 0 : 1
+        formatter.maximumFractionDigits = 1
         formatter.minimumFractionDigits = 0
 
         let abbreviation: String

@@ -175,6 +175,28 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testCalendarTagStatisticOpensBlogWithMatchingFilter() throws {
+        let app = launchApp { storageRoot in
+            try self.seedTaggedBlogRepository(at: storageRoot)
+        }
+
+        app.tabBars.buttons["Calendar"].tap()
+
+        let tripStatistic = app.buttons["calendarBlogTagStat-Trip"]
+        if !tripStatistic.waitForExistence(timeout: 1) {
+            app.swipeUp()
+        }
+        if !tripStatistic.waitForExistence(timeout: 1) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(tripStatistic.waitForExistence(timeout: 5))
+        tripStatistic.tap()
+
+        XCTAssertTrue(app.staticTexts["Trip Recap"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Reading Summary"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor
     func testNoImageBlogDetailUsesLeadingInsetLayout() throws {
         let app = launchApp()
 

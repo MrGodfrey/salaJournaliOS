@@ -5,10 +5,9 @@ struct BlogView: View {
     @Bindable var store: AppStore
 
     @State private var navigationPath: [EntryDestination] = []
-    @State private var selectedTag: String?
 
     private var filteredEntries: [EntryRecord] {
-        guard let selectedTag else {
+        guard let selectedTag = store.selectedBlogTag else {
             return store.blogEntries
         }
 
@@ -20,7 +19,7 @@ struct BlogView: View {
             VStack(spacing: 0) {
                 BlogTagFilterControl(
                     tags: store.blogTags,
-                    selection: $selectedTag
+                    selection: $store.selectedBlogTag
                 )
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
@@ -39,7 +38,7 @@ struct BlogView: View {
                         .padding(.vertical, 48)
                     } else if filteredEntries.isEmpty {
                         ContentUnavailableView(
-                            "No posts in \(selectedTag ?? "this tag")",
+                            "No posts in \(store.selectedBlogTag ?? "this tag")",
                             systemImage: "line.3.horizontal.decrease.circle",
                             description: Text("Choose another tag or add a new blog post.")
                         )
@@ -101,9 +100,9 @@ struct BlogView: View {
                 navigationPath = [destination]
             }
             .onChange(of: store.blogTags) { _, newTags in
-                if let selectedTag,
+                if let selectedTag = store.selectedBlogTag,
                    !newTags.contains(selectedTag) {
-                    self.selectedTag = nil
+                    store.selectedBlogTag = nil
                 }
             }
             .overlay(alignment: .bottomTrailing) {
