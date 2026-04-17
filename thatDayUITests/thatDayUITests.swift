@@ -240,6 +240,8 @@ final class thatDayUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Current Repository"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["currentRepositoryPicker"].exists)
+        XCTAssertTrue(app.staticTexts["Blog Tags"].exists)
     }
 
     @MainActor

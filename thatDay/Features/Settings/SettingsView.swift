@@ -10,16 +10,82 @@ struct SettingsView: View {
     @State private var isShowingFileImporter = false
     @State private var isShowingClearRepositoryConfirmation = false
     @State private var newBlogTagName = ""
-    @State private var reassigningBlogTag: String?
-    @State private var unusedBlogTagToDelete: String?
+    @State private var pendingBlogTagDeletion: BlogTagDeletionRequest?
+    @State private var dropTargetBlogTag: String?
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Repository Status") {
-                    LabeledContent("Current Repository", value: store.currentRepositoryName)
+                    Picker(
+                        "Current Repository",
+                        selection: Binding(
+                            get: { store.currentRepositoryID },
+                            set: { repositoryID in
+                                Task {
+                                    await store.switchRepository(to: repositoryID)
+                                }
+                            }
+                        )
+                    ) {
+                        ForEach(store.sortedRepositories) { repository in
+                            Text(repository.displayName).tag(repository.id)
+                        }
+                    }
+                    .accessibilityIdentifier("currentRepositoryPicker")
+
                     LabeledContent("Current Access", value: store.repositoryStatusTitle)
-                    Text(store.repositorySummary)
+                }
+
+                Section("Blog Tags") {
+                    ForEach(store.blogTags, id: \.self) { tag in
+                        blogTagRow(for: tag)
+                            .listRowBackground(
+                                dropTargetBlogTag == tag
+                                    ? Color(.secondarySystemGroupedBackground)
+                                    : Color.clear
+                            )
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if store.canEditRepository && store.blogTags.count > 1 {
+                                    Button {
+                                        prepareBlogTagDeletion(tag)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                    .tint(.red)
+                                }
+                            }
+                    }
+
+                    if store.canEditRepository {
+                        HStack(spacing: 12) {
+                            TextField("New Tag", text: $newBlogTagName)
+                                .textInputAutocapitalization(.words)
+                                .accessibilityIdentifier("newBlogTagField")
+
+                            Button("Add") {
+                                let tagName = newBlogTagName.trimmed
+                                guard !tagName.isEmpty else {
+                                    return
+                                }
+
+                                newBlogTagName = ""
+                                Task {
+                                    await store.addBlogTag(named: tagName)
+                                }
+                            }
+                            .disabled(
+                                newBlogTagName.trimmed.isEmpty ||
+                                    store.blogTags.contains(where: {
+                                        $0.compare(newBlogTagName.trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                                    })
+                            )
+                        }
+                    }
+
+                    Text(store.canEditRepository
+                         ? "Tags belong to the current repository. Drag a tag to reorder it, add new ones here, and deleting a used tag will first ask where its blog posts should move."
+                         : "The current repository is read-only, so blog tags can be viewed here but cannot be changed.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -94,66 +160,6 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Blog Tags") {
-                    ForEach(store.blogTags, id: \.self) { tag in
-                        HStack(spacing: 12) {
-                            Text(tag)
-
-                            Spacer()
-
-                            Text("\(store.blogTagUsageCounts[tag, default: 0])")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if store.canEditRepository && store.blogTags.count > 1 {
-                                Button(role: .destructive) {
-                                    prepareBlogTagDeletion(tag)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                    .onMove { source, destination in
-                        Task {
-                            await store.moveBlogTags(fromOffsets: source, toOffset: destination)
-                        }
-                    }
-
-                    if store.canEditRepository {
-                        HStack(spacing: 12) {
-                            TextField("New Tag", text: $newBlogTagName)
-                                .textInputAutocapitalization(.words)
-                                .accessibilityIdentifier("newBlogTagField")
-
-                            Button("Add") {
-                                let tagName = newBlogTagName.trimmed
-                                guard !tagName.isEmpty else {
-                                    return
-                                }
-
-                                newBlogTagName = ""
-                                Task {
-                                    await store.addBlogTag(named: tagName)
-                                }
-                            }
-                            .disabled(
-                                newBlogTagName.trimmed.isEmpty ||
-                                    store.blogTags.contains(where: {
-                                        $0.compare(newBlogTagName.trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-                                    })
-                            )
-                        }
-                    }
-
-                    Text(store.canEditRepository
-                         ? "Tags belong to the current repository. Reorder them with Edit, add new ones here, and deleting a used tag will first ask where its blog posts should move."
-                         : "The current repository is read-only, so blog tags can be viewed here but cannot be changed.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
                 Section("Import / Export") {
                     Button {
                         Task {
@@ -186,22 +192,6 @@ struct SettingsView: View {
 
                 Section("Advanced") {
                     Picker(
-                        "Current Repository",
-                        selection: Binding(
-                            get: { store.currentRepositoryID },
-                            set: { repositoryID in
-                                Task {
-                                    await store.switchRepository(to: repositoryID)
-                                }
-                            }
-                        )
-                    ) {
-                        ForEach(store.sortedRepositories) { repository in
-                            Text(repository.displayName).tag(repository.id)
-                        }
-                    }
-
-                    Picker(
                         "Default on Launch",
                         selection: Binding(
                             get: { store.defaultRepositoryID },
@@ -224,12 +214,6 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if store.canEditRepository {
-                    ToolbarItem(placement: .topBarLeading) {
-                        EditButton()
-                    }
-                }
-
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
                         dismiss()
@@ -250,64 +234,39 @@ struct SettingsView: View {
             } message: {
                 Text("All entries and images in the current repository will be deleted. This action cannot be undone.")
             }
-            .confirmationDialog(
-                reassigningBlogTag.map { "Delete \($0)?" } ?? "Delete Tag?",
+            .alert(
+                pendingBlogTagDeletion?.title ?? "Delete Tag?",
                 isPresented: Binding(
-                    get: { reassigningBlogTag != nil },
+                    get: { pendingBlogTagDeletion != nil },
                     set: { isPresented in
                         if !isPresented {
-                            reassigningBlogTag = nil
+                            pendingBlogTagDeletion = nil
                         }
                     }
                 ),
-                titleVisibility: .visible
+                presenting: pendingBlogTagDeletion
             ) {
-                if let tag = reassigningBlogTag {
-                    ForEach(store.blogTags.filter { $0 != tag }, id: \.self) { replacementTag in
+                request in
+                if request.requiresReassignment {
+                    ForEach(request.replacementTags, id: \.self) { replacementTag in
                         Button("Move posts to \(replacementTag)") {
-                            let sourceTag = tag
-                            reassigningBlogTag = nil
-                            Task {
-                                await store.deleteBlogTag(sourceTag, reassigningEntriesTo: replacementTag)
-                            }
+                            confirmBlogTagDeletion(
+                                request.tag,
+                                replacementTag: replacementTag
+                            )
                         }
                     }
-                }
-
-                Button("Cancel", role: .cancel) {
-                    reassigningBlogTag = nil
-                }
-            } message: {
-                if let tag = reassigningBlogTag {
-                    Text("Choose where existing blog posts tagged \(tag) should go before this tag is removed.")
-                }
-            }
-            .alert(
-                unusedBlogTagToDelete.map { "Delete \($0)?" } ?? "Delete Tag?",
-                isPresented: Binding(
-                    get: { unusedBlogTagToDelete != nil },
-                    set: { isPresented in
-                        if !isPresented {
-                            unusedBlogTagToDelete = nil
-                        }
-                    }
-                )
-            ) {
-                if let tag = unusedBlogTagToDelete {
+                } else {
                     Button("Delete", role: .destructive) {
-                        let sourceTag = tag
-                        unusedBlogTagToDelete = nil
-                        Task {
-                            await store.deleteBlogTag(sourceTag, reassigningEntriesTo: nil)
-                        }
+                        confirmBlogTagDeletion(request.tag, replacementTag: nil)
                     }
                 }
 
                 Button("Cancel", role: .cancel) {
-                    unusedBlogTagToDelete = nil
+                    pendingBlogTagDeletion = nil
                 }
-            } message: {
-                Text("This tag is not used by any blog posts and will be removed from the current repository.")
+            } message: { request in
+                Text(request.message)
             }
             .fileImporter(
                 isPresented: $isShowingFileImporter,
@@ -332,12 +291,97 @@ struct SettingsView: View {
         }
     }
 
-    private func prepareBlogTagDeletion(_ tag: String) {
-        if store.blogTagUsageCounts[tag, default: 0] > 0 {
-            reassigningBlogTag = tag
-        } else {
-            unusedBlogTagToDelete = tag
+    @ViewBuilder
+    private func blogTagRow(for tag: String) -> some View {
+        let row = HStack(spacing: 12) {
+            Text(tag)
+
+            Spacer()
+
+            Text("\(store.blogTagUsageCounts[tag, default: 0])")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if store.canEditRepository {
+                Image(systemName: "line.3.horizontal")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
         }
+        .contentShape(Rectangle())
+
+        if store.canEditRepository {
+            row
+                .draggable(tag)
+                .dropDestination(for: String.self) { items, location in
+                    handleBlogTagDrop(items, onto: tag, location: location)
+                } isTargeted: { isTargeted in
+                    dropTargetBlogTag = isTargeted ? tag : nil
+                }
+        } else {
+            row
+        }
+    }
+
+    private func prepareBlogTagDeletion(_ tag: String) {
+        pendingBlogTagDeletion = BlogTagDeletionRequest(
+            tag: tag,
+            replacementTags: store.blogTags.filter { $0 != tag },
+            usageCount: store.blogTagUsageCounts[tag, default: 0]
+        )
+    }
+
+    private func handleBlogTagDrop(_ items: [String], onto targetTag: String, location: CGPoint) -> Bool {
+        dropTargetBlogTag = nil
+
+        guard let sourceTag = items.first,
+              sourceTag != targetTag else {
+            return false
+        }
+
+        let placeAfter = location.y > 28
+        Task {
+            await store.moveBlogTag(
+                named: sourceTag,
+                relativeTo: targetTag,
+                placingAfter: placeAfter
+            )
+        }
+        return true
+    }
+
+    private func confirmBlogTagDeletion(_ tag: String, replacementTag: String?) {
+        pendingBlogTagDeletion = nil
+        Task {
+            await store.deleteBlogTag(tag, reassigningEntriesTo: replacementTag)
+        }
+    }
+}
+
+private struct BlogTagDeletionRequest: Identifiable {
+    let tag: String
+    let replacementTags: [String]
+    let usageCount: Int
+
+    var id: String {
+        tag
+    }
+
+    var title: String {
+        "Delete \(tag)?"
+    }
+
+    var requiresReassignment: Bool {
+        usageCount > 0
+    }
+
+    var message: String {
+        if requiresReassignment {
+            return "Choose where existing blog posts tagged \(tag) should go before this tag is removed."
+        }
+
+        return "This tag is not used by any blog posts and will be removed from the current repository."
     }
 }
 

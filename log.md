@@ -293,3 +293,27 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testBlogTagFilterShowsOnlyMatchingPosts -only-testing:thatDayUITests/thatDayUITests/testCalendarTagStatisticOpensBlogWithMatchingFilter`
     - UI 测试 `2/2` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-25-35-+0800.xcresult`
+
+## 2026-04-17 18:35
+
+- 调整 Settings 的仓库与标签管理布局：
+  - `Repository Status` 里的 `Current Repository` 改成可直接切换的选择入口
+  - 移除重复的仓库状态说明文案，不再显示 `Current repository: ... Access: ...`
+  - `Blog Tags` 区块前移到仓库状态后面
+  - `Advanced` 里删除 `Current Repository` 设置，只保留启动默认仓库和清空仓库
+- 修复 Blog 标签管理交互：
+  - 标签行支持直接拖动排序，排序结果会持久化到当前仓库
+  - 左滑删除改成先弹确认，不再出现标签先消失又回来的跳动
+  - 删除已使用标签时，改为使用居中的系统确认框来选择迁移目标，不再使用气泡式对话框
+- `README.md` 已同步更新：
+  - 补充 `Repository Status` 里的当前仓库切换入口
+  - 补充 Blog 标签拖动排序和新的删除确认方式
+- 新增 / 更新测试：
+  - 单元测试新增 `testMovingBlogTagRelativeToAnotherTagPersists`
+  - UI 测试更新 `testSettingsSheetOpensFromJournal`，校验新的仓库选择入口和标签区位置
+- 验证记录：
+  - `xcodebuild build -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324'`
+    - 构建通过
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testDeletingBlogTagReassignsEntriesAndPersists -only-testing:thatDayTests/thatDayTests/testMovingBlogTagRelativeToAnotherTagPersists -only-testing:thatDayUITests/thatDayUITests/testSettingsSheetOpensFromJournal`
+    - 定向测试 `3/3` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-34-10-+0800.xcresult`

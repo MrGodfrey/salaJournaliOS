@@ -196,14 +196,6 @@ final class AppStore {
         preferences.isSharedUpdateNotificationEnabled
     }
 
-    var repositorySummary: String {
-        if repositoryDescriptor.role == .local {
-            return "You are currently using your local repository."
-        }
-
-        return "Current repository: \(currentRepositoryName). Access: \(repositoryDescriptor.role.title)."
-    }
-
     var selectedDateTitle: String {
         AppLanguage.monthDayTitle(for: selectedDate)
     }
@@ -482,10 +474,34 @@ final class AppStore {
             return
         }
 
-        let previousEntries = entries
-        let previousBlogTags = blogTags
-        blogTags.move(fromOffsets: source, toOffset: destination)
-        await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
+        var updatedBlogTags = blogTags
+        updatedBlogTags.move(fromOffsets: source, toOffset: destination)
+        await updateBlogTags(updatedBlogTags)
+    }
+
+    func moveBlogTag(named sourceTag: String, relativeTo targetTag: String, placingAfter: Bool) async {
+        guard canEditRepository else {
+            alertMessage = "The current repository is read-only and cannot change blog tags."
+            return
+        }
+
+        guard sourceTag != targetTag,
+              let sourceIndex = blogTags.firstIndex(of: sourceTag),
+              let targetIndex = blogTags.firstIndex(of: targetTag) else {
+            return
+        }
+
+        var updatedBlogTags = blogTags
+        updatedBlogTags.remove(at: sourceIndex)
+
+        let adjustedTargetIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
+        let insertionIndex = min(
+            max(adjustedTargetIndex + (placingAfter ? 1 : 0), 0),
+            updatedBlogTags.count
+        )
+        updatedBlogTags.insert(sourceTag, at: insertionIndex)
+
+        await updateBlogTags(updatedBlogTags)
     }
 
     func deleteBlogTag(_ tag: String, reassigningEntriesTo replacementTag: String?) async {
@@ -1053,6 +1069,17 @@ final class AppStore {
             blogTags = previousBlogTags
             alertMessage = Self.userFacingMessage(for: error)
         }
+    }
+
+    private func updateBlogTags(_ updatedBlogTags: [String]) async {
+        guard updatedBlogTags != blogTags else {
+            return
+        }
+
+        let previousEntries = entries
+        let previousBlogTags = blogTags
+        blogTags = updatedBlogTags
+        await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
     }
 
     private func applyAcceptedShare(_ accepted: AcceptedSharedRepository) throws {

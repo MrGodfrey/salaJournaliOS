@@ -245,6 +245,59 @@ final class thatDayTests: XCTestCase {
     }
 
     @MainActor
+    func testMovingBlogTagRelativeToAnotherTagPersists() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let now = fixtureDate("2026-04-16T09:00:00Z")
+
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    makeEntry(
+                        kind: .blog,
+                        title: "Reading Post",
+                        body: "Tagged reading",
+                        blogTag: "Reading",
+                        happenedAt: now
+                    ),
+                    makeEntry(
+                        kind: .blog,
+                        title: "Trip Post",
+                        body: "Tagged trip",
+                        blogTag: "Trip",
+                        happenedAt: now
+                    )
+                ],
+                updatedAt: now,
+                blogTags: ["Reading", "Watching", "Trip", "note"]
+            )
+        )
+
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: MockCloudRepositoryService(),
+            now: { now }
+        )
+        await store.loadIfNeeded()
+
+        await store.moveBlogTag(named: "note", relativeTo: "Reading", placingAfter: false)
+        await store.moveBlogTag(named: "Reading", relativeTo: "Trip", placingAfter: true)
+
+        XCTAssertEqual(store.blogTags, ["note", "Watching", "Trip", "Reading"])
+
+        let reloadedStore = AppStore(
+            libraryStore: libraryStore,
+            cloudService: MockCloudRepositoryService(),
+            now: { now }
+        )
+        await reloadedStore.loadIfNeeded()
+
+        XCTAssertEqual(reloadedStore.blogTags, ["note", "Watching", "Trip", "Reading"])
+    }
+
+    @MainActor
     func testOpeningBlogTagSwitchesToBlogTabAndAppliesFilter() async throws {
         let store = try makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
         await store.loadIfNeeded()
