@@ -25,6 +25,10 @@ enum AppLanguage {
         monthFormatter.string(from: date)
     }
 
+    static func monthYearTitle(for date: Date) -> String {
+        monthYearFormatter.string(from: date)
+    }
+
     static func weekdayTitle(for date: Date) -> String {
         weekdayFormatter.string(from: date)
     }
@@ -39,6 +43,7 @@ enum AppLanguage {
 
     private static let monthDayFormatter = makeFormatter(dateFormat: "MMMM d")
     private static let monthFormatter = makeFormatter(dateFormat: "MMMM")
+    private static let monthYearFormatter = makeFormatter(dateFormat: "MMMM yyyy")
     private static let weekdayFormatter = makeFormatter(dateFormat: "EEEE")
     private static let timelineFormatter = makeFormatter(dateFormat: "MMMM d, yyyy")
     private static let cardDateFormatter = makeFormatter(dateFormat: "EEEE, M/d/yyyy")

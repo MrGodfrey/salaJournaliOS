@@ -30,6 +30,7 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
     var kind: EntryKind
     var title: String
     var body: String
+    var blogTag: String?
     var happenedAt: Date
     var createdAt: Date
     var updatedAt: Date
@@ -40,6 +41,7 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
         kind: EntryKind,
         title: String,
         body: String,
+        blogTag: String? = nil,
         happenedAt: Date,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -49,6 +51,7 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
         self.kind = kind
         self.title = title
         self.body = body
+        self.blogTag = blogTag?.trimmed.nilIfEmpty
         self.happenedAt = happenedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt

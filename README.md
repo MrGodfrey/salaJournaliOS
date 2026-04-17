@@ -4,14 +4,15 @@
 
 它要解决的不是“多写几篇文章”这么简单，而是把同一天历年的 Journal 放在一起回看，同时把不适合放进 Journal 的内容单独沉淀成 Blog，再把搜索、共享、导入导出和设备侧安全都放进同一条稳定主线里。
 
-当前版本聚焦六件事：
+当前版本聚焦这些事：
 
 - 打开应用先看到今天，以及这一天历年的 Journal
-- 用 Blog 单独保存不进入 Journal / Calendar 的长文
+- 在 Calendar 里看月历、切月份和写作统计
+- 用 Blog 单独保存不进入 Journal / Calendar 的长文，并按标签筛选
 - 用统一搜索同时找 Journal 和 Blog
 - 把本地仓库、共享仓库、默认仓库切换说清楚
 - 支持导入 ZIP、导出 ZIP、清空当前仓库
-- 在不把界面做复杂的前提下，补齐生物识别解锁（Face ID / Touch ID）、共享通知和图片插入
+- 在不把界面做复杂的前提下，补齐生物识别解锁（Face ID / Touch ID）、共享通知、图片插入和 Blog 标签管理
 
 ## 1. 设计方式
 
@@ -74,6 +75,8 @@
 | --- | --- |
 | 想看同一天历年的记录 | `Journal` 按“同月同日”聚合文章，按年份倒序展示 |
 | 不是所有内容都适合进入 Journal | 提供独立 `Blog` 列表，Blog 不进入 `Journal / Calendar`，但会进入搜索 |
+| 想给 Blog 分类型并按类型查看 | Blog 支持标签显示和顶部标签筛选，标签可在 `Settings` 里增删、排序 |
+| 想在 Calendar 一眼看到这个月写了多少 | `Calendar` 上方显示月历，下方显示 `Journaled Days / Blogs / Written` 三张统计卡片 |
 | 想统一查 Journal 和 Blog | `Search` 对两类内容统一检索，空查询不返回结果 |
 | 一台设备上可能有多座仓库 | 支持本地仓库、共享仓库、默认仓库切换和最近打开排序 |
 | 想备份、迁移或恢复数据 | 支持当前仓库导出 ZIP、导入 ZIP、清空当前仓库 |
@@ -87,8 +90,9 @@
 
 - Journal / Blog 都支持新建、阅读、编辑、删除
 - Search 可以搜到 Journal / Blog
-- Calendar 可以定位日期并回到 Journal
-- Settings 可以发起共享、接受共享、切换仓库、设置默认仓库
+- Calendar 可以定位日期、切月份、回到今天，并看到本月统计
+- Blog 可以按标签显示和筛选
+- Settings 可以发起共享、接受共享、切换仓库、设置默认仓库和管理 Blog 标签
 - ZIP 导入导出和清空当前仓库都已经进入设置页
 - 生物识别锁定和共享仓库更新提醒已经有真实入口
 - 图片从相册插入后会先压缩，再进入保存链路
@@ -130,9 +134,12 @@
 ### 3.3 Calendar
 
 - 使用自定义月视图网格
-- 年份和月份都可点开滚轮选择
-- 右上角 `NOW` 回到今天
+- 日历位于上方，统计卡片位于下方
+- 左侧月份年份按钮会显示当前 `Month Year`，旁边带小箭头，点开后可用滚轮切换月份
+- 右侧提供上一个月 / 下一个月按钮
+- 顶部工具栏提供 `Today` 回到今天和 `Settings`
 - 有 Journal 的日期会显示打点
+- `Journaled Days` 卡片统计 Journal 篇数，`Blogs` 卡片统计 Blog 篇数，`Written` 卡片统计全部 Journal + Blog 的总字数
 - 选中某一天后返回对应 Journal 上下文
 
 ### 3.4 Search
@@ -144,7 +151,9 @@
 ### 3.5 Blog
 
 - 可编辑仓库使用和 Journal 一样的右下角 `+`；只读仓库不显示该按钮
+- 列表顶部提供 iOS segmented control 风格的标签筛选，支持 `All` 和当前仓库所有 Blog 标签
 - 文章按时间倒序排列
+- 每篇 Blog 会在日期后显示当前标签
 - Blog 文章不会进入 Journal / Calendar，但会被 Search 检索
 - 列表支持下拉刷新；如果当前正在看共享仓库，会立即重新拉取最新内容
 
@@ -155,6 +164,8 @@
 - 右上角 `编辑` 进入编辑模式
 - 编辑模式顶部固定为 `取消 / 保存`
 - 删除入口只在编辑模式里显示
+- Blog 编辑页会提供标签选择器，新建 Blog 默认落到 `note`
+- Blog 详情页和列表卡片都会在日期后显示标签
 - 插图入口只有相册选图，不再支持图片链接输入
 - 选图后会立刻压缩，预览和最终落盘都使用压缩后的图片
 
@@ -167,11 +178,12 @@
 3. 接受别人发来的 iCloud 共享链接
 4. 开关“共享仓库更新提醒”（本地通知 + 应用角标）
 5. 开关生物识别解锁（Face ID / Touch ID）
-6. 导出当前仓库 ZIP
-7. 导入 ZIP 到当前仓库
-8. 切换当前使用仓库
-9. 指定启动时默认打开哪座仓库
-10. 清空当前仓库内容
+6. 管理 Blog 标签：新增、排序、删除；删除已使用标签时选择旧文章迁移到哪个标签
+7. 导出当前仓库 ZIP
+8. 导入 ZIP 到当前仓库
+9. 切换当前使用仓库
+10. 指定启动时默认打开哪座仓库
+11. 清空当前仓库内容
 
 ## 4. 架构层
 
@@ -197,7 +209,7 @@
 
 - 当前选中的 tab、日期、月份、搜索词
 - 当前打开的是哪座仓库
-- 当前仓库的文章数组和权限
+- 当前仓库的文章数组、Blog 标签、统计数据和权限
 - 编辑器 session、设置页、共享页、导出结果、导入导出进度
 - 生物识别锁定状态
 - 通知跳转和共享接入后的路由刷新
@@ -215,8 +227,8 @@
 
 其中最重要的边界是：
 
-- `EntryRecord` 只表达内容本身
-- `RepositorySnapshot` 表达一座仓库当前的全部文章
+- `EntryRecord` 只表达内容本身；Blog 文章可带 `blogTag`
+- `RepositorySnapshot` 表达一座仓库当前的全部文章，以及这座仓库自己的 Blog 标签顺序
 - `RepositoryDescriptor` 表达这座仓库在 CloudKit 里的身份和权限
 - `RepositoryReference` 表达“这台设备知道哪些仓库、显示名是什么、最近何时打开”
 
@@ -242,6 +254,8 @@ Application Support/thatDay/
 ```
 
 这套结构由 `RepositoryLibraryStore` 管理，它还负责把旧版“根目录单仓库”数据自动迁移到 `repositories/local/`。
+
+`repository.json` 现在除了文章数组，也会保存仓库级 Blog 标签配置，因此标签顺序、增删结果和文章标签都会跟随本地持久化、共享快照和 ZIP 导入导出一起移动。
 
 ### 4.5 多仓库与共享权限
 
@@ -349,7 +363,8 @@ xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug 
 - Search 空态与 Journal / Blog 混合命中
 - Journal 日期切换与回到今天
 - Calendar 网格生成
-- Blog 持久化
+- Blog 持久化、默认标签、标签删除后的重分配
+- Journal / Blog 总字数统计
 - 共享仓库接受、默认仓库启动、手动刷新与图片恢复
 - 共享仓库保存时图片会跟着上传到云端快照
 - ZIP 导入导出回环
@@ -358,8 +373,9 @@ xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug 
 
 UI 测试覆盖：
 
-- Calendar 年月切换与 `NOW`
+- Calendar 月份切换与 `Today`
 - Blog 新建后进入 Search
+- Blog 标签筛选
 - Blog 阅读页编辑与删除
 - Journal 头部日期回到今天
 - Journal `Previous / Next`
@@ -370,12 +386,12 @@ UI 测试覆盖：
 
 ### 5.4 最近一次完整验证
 
-- 时间：2026-04-17 15:12 - 15:15（Asia/Shanghai）
+- 时间：2026-04-17 17:56 - 17:59（Asia/Shanghai）
 - 命令：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
 - 结果：通过
-- 单元测试：14 项通过
-- UI 测试：12 项通过
-- xcresult：`/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-12-44-+0800.xcresult`
+- 单元测试：27 项通过
+- UI 测试：14 项通过
+- xcresult：`/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_17-56-15-+0800.xcresult`
 
 ### 5.5 本次测试里看到但不属于业务失败的问题
 

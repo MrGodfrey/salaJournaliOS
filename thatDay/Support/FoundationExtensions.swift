@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 extension String {
     var trimmed: String {
@@ -8,6 +9,30 @@ extension String {
     var nilIfEmpty: String? {
         let value = trimmed
         return value.isEmpty ? nil : value
+    }
+
+    var writtenWordCount: Int {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = self
+        let ignoredScalars = CharacterSet.whitespacesAndNewlines
+            .union(.punctuationCharacters)
+            .union(.symbols)
+
+        var count = 0
+        tokenizer.enumerateTokens(in: startIndex..<endIndex) { _, _ in
+            count += 1
+            return true
+        }
+
+        if count > 0 {
+            return count
+        }
+
+        return unicodeScalars.reduce(into: 0) { count, scalar in
+            if !ignoredScalars.contains(scalar) {
+                count += 1
+            }
+        }
     }
 }
 

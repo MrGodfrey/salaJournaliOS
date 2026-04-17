@@ -127,6 +127,7 @@ final class AppStore {
     private(set) var repositoryDescriptor: RepositoryDescriptor = .local
     private(set) var repositories: [RepositoryReference] = [.local]
     private(set) var currentRepositoryID = RepositoryReference.localRepositoryID
+    private(set) var blogTags: [String] = RepositorySnapshot.defaultBlogTags
 
     init(
         libraryStore: RepositoryLibraryStore,
@@ -258,6 +259,42 @@ final class AppStore {
             }
     }
 
+    var journalEntryCount: Int {
+        entries.filter { $0.kind == .journal }.count
+    }
+
+    var blogEntryCount: Int {
+        blogEntries.count
+    }
+
+    var writtenWordCount: Int {
+        entries.reduce(into: 0) { total, entry in
+            total += [entry.title, entry.body]
+                .joined(separator: " ")
+                .writtenWordCount
+        }
+    }
+
+    var formattedWrittenWordCount: String {
+        Self.abbreviatedCount(writtenWordCount)
+    }
+
+    var blogTagUsageCounts: [String: Int] {
+        var counts = Dictionary(uniqueKeysWithValues: blogTags.map { ($0, 0) })
+        for entry in blogEntries {
+            guard let tag = entry.blogTag else {
+                continue
+            }
+            counts[tag, default: 0] += 1
+        }
+
+        return counts
+    }
+
+    var defaultBlogTag: String {
+        Self.defaultBlogTag(in: blogTags)
+    }
+
     var searchResults: [EntryRecord] {
         let normalizedQuery = searchText.trimmed
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
@@ -311,6 +348,7 @@ final class AppStore {
             alertMessage = Self.userFacingMessage(for: error)
             if entries.isEmpty {
                 entries = SampleData.makeEntries()
+                blogTags = RepositorySnapshot.defaultBlogTags
             }
         }
     }
@@ -358,6 +396,7 @@ final class AppStore {
         defer { isBusy = false }
 
         do {
+            normalizeRepositoryState()
             let entryID = editingEntry?.id ?? UUID()
             let didReplaceImage = importedImageData != nil
             let imageReference: String?
@@ -371,9 +410,13 @@ final class AppStore {
             }
 
             let timestamp = now()
+            let blogTag = normalized.kind == .blog
+                ? normalizedBlogTag(for: normalized.blogTag, availableTags: blogTags)
+                : nil
             if var existing = editingEntry {
                 existing.title = normalized.title
                 existing.body = normalized.body
+                existing.blogTag = blogTag
                 existing.happenedAt = normalized.happenedAt
                 existing.updatedAt = timestamp
                 existing.imageReference = imageReference
@@ -388,6 +431,7 @@ final class AppStore {
                         kind: normalized.kind,
                         title: normalized.title,
                         body: normalized.body,
+                        blogTag: blogTag,
                         happenedAt: normalized.happenedAt,
                         createdAt: timestamp,
                         updatedAt: timestamp,
@@ -406,6 +450,84 @@ final class AppStore {
             alertMessage = Self.userFacingMessage(for: error)
             return false
         }
+    }
+
+    func addBlogTag(named rawName: String) async {
+        guard canEditRepository else {
+            alertMessage = "The current repository is read-only and cannot change blog tags."
+            return
+        }
+
+        let name = rawName.trimmed
+        guard !name.isEmpty else {
+            alertMessage = "Enter a tag name."
+            return
+        }
+
+        guard !blogTags.contains(where: { $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) else {
+            alertMessage = "That blog tag already exists."
+            return
+        }
+
+        let previousEntries = entries
+        let previousBlogTags = blogTags
+        blogTags.append(name)
+        await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
+    }
+
+    func moveBlogTags(fromOffsets source: IndexSet, toOffset destination: Int) async {
+        guard canEditRepository else {
+            alertMessage = "The current repository is read-only and cannot change blog tags."
+            return
+        }
+
+        let previousEntries = entries
+        let previousBlogTags = blogTags
+        blogTags.move(fromOffsets: source, toOffset: destination)
+        await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
+    }
+
+    func deleteBlogTag(_ tag: String, reassigningEntriesTo replacementTag: String?) async {
+        guard canEditRepository else {
+            alertMessage = "The current repository is read-only and cannot change blog tags."
+            return
+        }
+
+        guard blogTags.contains(tag) else {
+            return
+        }
+
+        guard blogTags.count > 1 else {
+            alertMessage = "At least one blog tag must remain."
+            return
+        }
+
+        let usageCount = blogEntries.filter { $0.blogTag == tag }.count
+        if usageCount > 0 {
+            guard let replacementTag,
+                  replacementTag != tag,
+                  blogTags.contains(replacementTag) else {
+                alertMessage = "Choose a destination tag for existing blog posts."
+                return
+            }
+        }
+
+        let previousEntries = entries
+        let previousBlogTags = blogTags
+        entries = entries.map { entry in
+            guard entry.kind == .blog,
+                  entry.blogTag == tag else {
+                return entry
+            }
+
+            var updatedEntry = entry
+            updatedEntry.blogTag = replacementTag
+            updatedEntry.updatedAt = now()
+            return updatedEntry
+        }
+        blogTags.removeAll { $0 == tag }
+
+        await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
     }
 
     func deleteEntry(_ entry: EntryRecord) async {
@@ -509,7 +631,8 @@ final class AppStore {
             let snapshot = try currentRepositoryStore.makeSnapshot(
                 entries: entries,
                 updatedAt: now(),
-                embeddingImages: true
+                embeddingImages: true,
+                blogTags: blogTags
             )
             repositoryDescriptor = try await cloudService.saveSnapshot(snapshot, using: repositoryDescriptor)
             try currentRepositoryStore.saveDescriptor(repositoryDescriptor)
@@ -756,7 +879,7 @@ final class AppStore {
                 }
             }
 
-            entries = importedSnapshot.entries
+            applySnapshot(importedSnapshot)
             try await persistEntries()
             invalidateImageViews()
             transferProgress = nil
@@ -862,6 +985,57 @@ final class AppStore {
         libraryStore.repositoryStore(for: currentRepositoryID)
     }
 
+    private func applySnapshot(_ snapshot: RepositorySnapshot) {
+        let normalizedTags = RepositorySnapshot.normalizedBlogTags(snapshot.blogTags, entries: snapshot.entries)
+        blogTags = normalizedTags
+        entries = normalizedEntries(snapshot.entries, using: normalizedTags)
+    }
+
+    private func normalizeRepositoryState() {
+        let normalizedTags = RepositorySnapshot.normalizedBlogTags(blogTags, entries: entries)
+        blogTags = normalizedTags
+        entries = normalizedEntries(entries, using: normalizedTags)
+    }
+
+    private func normalizedEntries(_ entries: [EntryRecord], using blogTags: [String]) -> [EntryRecord] {
+        entries.map { entry in
+            var normalizedEntry = entry
+            if entry.kind == .blog {
+                normalizedEntry.blogTag = normalizedBlogTag(for: entry.blogTag, availableTags: blogTags)
+            } else {
+                normalizedEntry.blogTag = nil
+            }
+            return normalizedEntry
+        }
+    }
+
+    private func normalizedBlogTag(for rawTag: String?, availableTags: [String]) -> String {
+        guard let tag = rawTag?.trimmed.nilIfEmpty else {
+            return Self.defaultBlogTag(in: availableTags)
+        }
+
+        if let matchedTag = availableTags.first(where: {
+            $0.compare(tag, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }) {
+            return matchedTag
+        }
+
+        return Self.defaultBlogTag(in: availableTags)
+    }
+
+    private func persistCurrentRepositoryMutation(previousEntries: [EntryRecord], previousBlogTags: [String]) async {
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            try await persistEntries()
+        } catch {
+            entries = previousEntries
+            blogTags = previousBlogTags
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
     private func applyAcceptedShare(_ accepted: AcceptedSharedRepository) throws {
         let repositoryID = accepted.descriptor.storageIdentifier
         let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
@@ -889,7 +1063,7 @@ final class AppStore {
         repositoryDescriptor = try repositoryStore.loadDescriptor() ?? reference?.descriptor ?? .local
 
         if let snapshot = try repositoryStore.loadSnapshot() {
-            entries = snapshot.entries
+            applySnapshot(snapshot)
             upsertRepositoryReference(
                 repositoryID: currentRepositoryID,
                 descriptor: repositoryDescriptor,
@@ -899,6 +1073,7 @@ final class AppStore {
             )
         } else if currentRepositoryID == RepositoryReference.localRepositoryID {
             entries = SampleData.makeEntries()
+            blogTags = RepositorySnapshot.defaultBlogTags
             let snapshot = RepositorySnapshot(entries: entries, updatedAt: now())
             try repositoryStore.saveDescriptor(.local)
             try repositoryStore.saveSnapshot(snapshot)
@@ -912,11 +1087,12 @@ final class AppStore {
             )
         } else {
             entries = []
+            blogTags = RepositorySnapshot.defaultBlogTags
         }
 
         if repositoryDescriptor.isCloudBacked {
             let snapshot = try await cloudService.loadSnapshot(using: repositoryDescriptor)
-            entries = snapshot.entries
+            applySnapshot(snapshot)
             try repositoryStore.saveCloudSnapshot(snapshot)
             invalidateImageViews()
             upsertRepositoryReference(
@@ -932,14 +1108,20 @@ final class AppStore {
     }
 
     private func persistEntries() async throws {
-        let snapshot = RepositorySnapshot(entries: entries, updatedAt: now())
+        normalizeRepositoryState()
+        let snapshot = RepositorySnapshot(
+            entries: entries,
+            updatedAt: now(),
+            blogTags: blogTags
+        )
         try currentRepositoryStore.saveSnapshot(snapshot)
 
         if repositoryDescriptor.role != .local {
             let cloudSnapshot = try currentRepositoryStore.makeSnapshot(
                 entries: entries,
                 updatedAt: snapshot.updatedAt,
-                embeddingImages: true
+                embeddingImages: true,
+                blogTags: blogTags
             )
             repositoryDescriptor = try await cloudService.saveSnapshot(cloudSnapshot, using: repositoryDescriptor)
             try currentRepositoryStore.saveDescriptor(repositoryDescriptor)
@@ -1041,7 +1223,7 @@ final class AppStore {
 
         if reference.id == currentRepositoryID {
             repositoryDescriptor = reference.descriptor
-            entries = remoteSnapshot.entries
+            applySnapshot(remoteSnapshot)
             invalidateImageViews()
         }
 
@@ -1139,6 +1321,38 @@ final class AppStore {
 
     private func shouldApplySharedUpdateBadge(for trigger: SharedRepositoryRefreshTrigger) -> Bool {
         trigger == .push && !isApplicationActive
+    }
+
+    private static func defaultBlogTag(in tags: [String]) -> String {
+        tags.first(where: {
+            $0.compare("note", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }) ?? tags.first ?? RepositorySnapshot.defaultBlogTags.last ?? "note"
+    }
+
+    private static func abbreviatedCount(_ value: Int) -> String {
+        guard value >= 1000 else {
+            return String(value)
+        }
+
+        let formatter = NumberFormatter()
+        formatter.locale = AppLanguage.locale
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = value >= 10_000 ? 0 : 1
+        formatter.minimumFractionDigits = 0
+
+        let abbreviation: String
+        let scaledValue: Double
+        switch value {
+        case 1_000_000...:
+            abbreviation = "M"
+            scaledValue = Double(value) / 1_000_000
+        default:
+            abbreviation = "K"
+            scaledValue = Double(value) / 1_000
+        }
+
+        let formatted = formatter.string(from: NSNumber(value: scaledValue)) ?? String(format: "%.1f", scaledValue)
+        return formatted + abbreviation
     }
 
     private static func systemAuthenticateBiometrics(reason: String) async throws {

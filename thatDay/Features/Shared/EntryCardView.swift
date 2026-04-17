@@ -41,9 +41,16 @@ struct EntryCardView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
 
-            Text(entry.cardDateTitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text(entry.cardDateTitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let tag = entry.blogTag,
+                   entry.kind == .blog {
+                    BlogTagChip(tag: tag)
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -78,5 +85,19 @@ struct EntryCardView: View {
         .frame(maxWidth: .infinity)
         .frame(height: 204)
         .clipped()
+    }
+}
+
+struct BlogTagChip: View {
+    let tag: String
+
+    var body: some View {
+        Text(tag)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color.indigo)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.indigo.opacity(0.12), in: Capsule())
     }
 }

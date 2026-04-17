@@ -25,6 +25,7 @@ struct EntryDetailView: View {
                 kind: entry.kind,
                 title: entry.title,
                 body: entry.body,
+                blogTag: entry.blogTag ?? (entry.kind == .blog ? store.defaultBlogTag : nil),
                 happenedAt: entry.happenedAt
             )
         )
@@ -99,7 +100,8 @@ struct EntryDetailView: View {
                     selectedPhoto: $selectedPhoto,
                     importedImageData: importedImageData,
                     existingImageURL: store.imageURL(for: entry),
-                    imageRefreshVersion: store.imageRefreshVersion
+                    imageRefreshVersion: store.imageRefreshVersion,
+                    blogTags: store.blogTags
                 )
 
                 Section {
@@ -121,9 +123,16 @@ struct EntryDetailView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("entryDetailTitle")
 
-                        Text(entry.cardDateTitle)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Text(entry.cardDateTitle)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+
+                            if let tag = entry.blogTag,
+                               entry.kind == .blog {
+                                BlogTagChip(tag: tag)
+                            }
+                        }
 
                         Text(entry.body)
                             .font(.body)
@@ -186,6 +195,7 @@ struct EntryDetailView: View {
             kind: entry.kind,
             title: entry.title,
             body: entry.body,
+            blogTag: entry.blogTag ?? (entry.kind == .blog ? store.defaultBlogTag : nil),
             happenedAt: entry.happenedAt
         )
         importedImageData = nil
@@ -199,6 +209,7 @@ struct EntryDetailView: View {
                 kind: entry.kind,
                 title: entry.title,
                 body: entry.body,
+                blogTag: entry.blogTag ?? (entry.kind == .blog ? store.defaultBlogTag : nil),
                 happenedAt: entry.happenedAt
             )
         }

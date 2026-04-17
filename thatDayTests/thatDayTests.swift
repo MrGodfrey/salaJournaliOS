@@ -142,6 +142,88 @@ final class thatDayTests: XCTestCase {
         XCTAssertEqual(reloadedStore.currentRepositoryID, RepositoryReference.localRepositoryID)
     }
 
+    @MainActor
+    func testBlogEntriesDefaultToNoteTagAndWrittenStatisticsCountAllEntries() async throws {
+        let entries = [
+            makeEntry(
+                title: "Morning Note",
+                body: "Three calm lines",
+                happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+            ),
+            makeEntry(
+                kind: .blog,
+                title: "Reading Log",
+                body: "Four quick test words",
+                happenedAt: fixtureDate("2026-04-15T09:00:00Z")
+            )
+        ]
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: entries
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.blogEntries.first?.blogTag, "note")
+        XCTAssertEqual(store.journalEntryCount, 1)
+        XCTAssertEqual(store.blogEntryCount, 1)
+        XCTAssertEqual(store.writtenWordCount, 11)
+    }
+
+    @MainActor
+    func testDeletingBlogTagReassignsEntriesAndPersists() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let now = fixtureDate("2026-04-16T09:00:00Z")
+
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    makeEntry(
+                        kind: .blog,
+                        title: "Reading Post",
+                        body: "Tagged reading",
+                        blogTag: "Reading",
+                        happenedAt: now
+                    ),
+                    makeEntry(
+                        kind: .blog,
+                        title: "Trip Post",
+                        body: "Tagged trip",
+                        blogTag: "Trip",
+                        happenedAt: now
+                    )
+                ],
+                updatedAt: now,
+                blogTags: ["Reading", "Trip", "note"]
+            )
+        )
+
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: MockCloudRepositoryService(),
+            now: { now }
+        )
+        await store.loadIfNeeded()
+
+        await store.deleteBlogTag("Reading", reassigningEntriesTo: "Trip")
+
+        XCTAssertEqual(store.blogTags, ["Trip", "note"])
+        XCTAssertEqual(store.blogEntries.compactMap(\.blogTag), ["Trip", "Trip"])
+
+        let reloadedStore = AppStore(
+            libraryStore: libraryStore,
+            cloudService: MockCloudRepositoryService(),
+            now: { now }
+        )
+        await reloadedStore.loadIfNeeded()
+
+        XCTAssertEqual(reloadedStore.blogTags, ["Trip", "note"])
+        XCTAssertEqual(reloadedStore.blogEntries.compactMap(\.blogTag), ["Trip", "Trip"])
+    }
+
     func testStoreImageCompressesImportedPhotoBelow100KB() throws {
         let rootURL = makeTempDirectory()
         let store = LocalRepositoryStore(rootURL: rootURL)
@@ -988,12 +1070,14 @@ final class thatDayTests: XCTestCase {
         kind: EntryKind = .journal,
         title: String,
         body: String = "Body",
+        blogTag: String? = nil,
         happenedAt: Date
     ) -> EntryRecord {
         EntryRecord(
             kind: kind,
             title: title,
             body: body,
+            blogTag: blogTag,
             happenedAt: happenedAt,
             createdAt: happenedAt,
             updatedAt: happenedAt

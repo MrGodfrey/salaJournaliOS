@@ -9,6 +9,7 @@ struct EntryFormSections: View {
     let importedImageData: Data?
     let existingImageURL: URL?
     let imageRefreshVersion: Int
+    let blogTags: [String]
 
     var body: some View {
         Section("Details") {
@@ -17,6 +18,18 @@ struct EntryFormSections: View {
 
             DatePicker("Date", selection: $draft.happenedAt, displayedComponents: [.date])
                 .accessibilityIdentifier("entryDatePicker")
+
+            if draft.kind == .blog {
+                Picker("Tag", selection: Binding(
+                    get: { draft.blogTag ?? blogTags.first ?? RepositorySnapshot.defaultBlogTags.first ?? "Reading" },
+                    set: { draft.blogTag = $0 }
+                )) {
+                    ForEach(blogTags, id: \.self) { tag in
+                        Text(tag).tag(tag)
+                    }
+                }
+                .accessibilityIdentifier("entryBlogTagPicker")
+            }
         }
 
         Section("Content") {

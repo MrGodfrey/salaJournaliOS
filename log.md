@@ -207,3 +207,42 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
   - 整套测试通过：`thatDayTests 25/25`，`thatDayUITests 13/13`
   - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_17-31-57-+0800.xcresult`
+
+## 2026-04-17 17:59
+
+- Calendar 页面重排并对齐新的头部交互：
+  - 月历放到上方，统计卡片放到下方
+  - 头部左侧改为 `Month Year` + 小箭头，右侧提供上一个月 / 下一个月按钮
+  - `Today` 移到顶部工具栏，保留 `Settings`
+- Calendar 统计改成真实内容统计：
+  - `Journaled Days` 显示 Journal 篇数
+  - `Blogs` 显示 Blog 篇数
+  - `Written` 统计全部 Journal + Blog 的总字数
+  - 字数统计改用 `NLTokenizer` 做分词，缺省回退到按空白 / 标点过滤
+- Blog 补上标签能力：
+  - 文章模型新增 `blogTag`
+  - 仓库快照新增仓库级 `blogTags`，默认标签为 `Reading / Watching / Game / Trip / note`
+  - Blog 列表顶部新增 segmented control 标签筛选，支持 `All`
+  - Blog 卡片、详情页在日期后显示标签；编辑页可选择标签；新建 Blog 默认落到 `note`
+- Settings 新增 Blog 标签管理：
+  - 支持新增、排序、删除标签
+  - 删除已使用标签时，会弹出重分配对话框，要求先把旧标签文章迁移到另一个标签
+  - 标签配置跟随本地持久化、共享快照和 ZIP 导入导出一起保存
+- `README.md` 已同步更新：
+  - 补充 Calendar 新布局和统计语义
+  - 补充 Blog 标签显示、筛选和 Settings 管理说明
+  - 更新当前测试覆盖和最近一次完整验证记录
+- 新增 / 更新测试：
+  - 单元测试新增 `testBlogEntriesDefaultToNoteTagAndWrittenStatisticsCountAllEntries`
+  - 单元测试新增 `testDeletingBlogTagReassignsEntriesAndPersists`
+  - UI 测试新增 `testBlogTagFilterShowsOnlyMatchingPosts`
+  - 同步修正日历、设置页和无图详情布局相关 UI 断言
+- 验证记录：
+  - `xcodebuild build -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324'`
+    - 构建通过
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `27/27` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_17-50-12-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests`
+    - UI 测试 `14/14` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_17-56-15-+0800.xcresult`

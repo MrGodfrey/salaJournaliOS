@@ -13,7 +13,8 @@ struct CalendarView: View {
     @State private var pickerSelection = CalendarPickerSelection(year: 2026, month: 4)
 
     private let weekdaySymbols = AppLanguage.shortStandaloneWeekdaySymbols
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 7)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
+    private let statisticsColumns = Array(repeating: GridItem(.flexible(), spacing: 16), count: 3)
     private let calendar = AppLanguage.calendar
 
     private var displayedYear: Int {
@@ -25,7 +26,7 @@ struct CalendarView: View {
     }
 
     private var displayedMonthTitle: String {
-        AppLanguage.monthTitle(for: store.displayedMonth)
+        AppLanguage.monthYearTitle(for: store.displayedMonth)
     }
 
     private var yearRange: [Int] {
@@ -42,102 +43,46 @@ struct CalendarView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    HStack(spacing: 12) {
-                        Button {
-                            store.previousMonth()
-                        } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.headline)
-                        }
+                    calendarPanel(days: days)
 
-                        Spacer()
+                    LazyVGrid(columns: statisticsColumns, spacing: 16) {
+                        StatisticCard(
+                            title: "JOURNALED",
+                            value: String(store.journalEntryCount),
+                            systemImage: "book.closed",
+                            unit: "POSTS",
+                            colors: [Color(red: 0.86, green: 0.32, blue: 0.39), Color(red: 0.61, green: 0.18, blue: 0.35)]
+                        )
 
-                        HStack(spacing: 8) {
-                            Button {
-                                presentMonthPicker()
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(String(displayedYear))
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(String(displayedYear))
-                            .accessibilityIdentifier("calendarYearPickerButton")
+                        StatisticCard(
+                            title: "BLOGS",
+                            value: String(store.blogEntryCount),
+                            systemImage: "calendar",
+                            unit: "POSTS",
+                            colors: [Color(red: 0.34, green: 0.35, blue: 0.86), Color(red: 0.20, green: 0.21, blue: 0.67)]
+                        )
 
-                            Button {
-                                presentMonthPicker()
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(displayedMonthTitle)
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(displayedMonthTitle)
-                            .accessibilityIdentifier("calendarMonthPickerButton")
-                        }
-
-                        Spacer()
-
-                        Button {
-                            store.nextMonth()
-                        } label: {
-                            Image(systemName: "chevron.right")
-                                .font(.headline)
-                        }
-                    }
-                    .padding(.horizontal, 4)
-
-                    LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(weekdaySymbols, id: \.self) { symbol in
-                            Text(symbol)
-                                .font(.caption.bold())
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity)
-                        }
-
-                        ForEach(days) { day in
-                            Button {
-                                store.goToJournal(for: day.date)
-                            } label: {
-                                VStack(spacing: 6) {
-                                    Text("\(day.dayNumber)")
-                                        .font(.body.weight(day.isSelected ? .bold : .regular))
-
-                                    Circle()
-                                        .fill(day.hasJournalEntries ? Color.indigo : Color.clear)
-                                        .frame(width: 6, height: 6)
-                                }
-                                .foregroundStyle(day.isInDisplayedMonth ? Color.primary : Color.secondary.opacity(0.5))
-                                .frame(maxWidth: .infinity, minHeight: 48)
-                                .padding(.vertical, 6)
-                                .background(day.isSelected ? Color.indigo.opacity(0.12) : Color(.secondarySystemGroupedBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("calendarDay-\(day.key)")
-                        }
+                        StatisticCard(
+                            title: "WRITTEN",
+                            value: store.formattedWrittenWordCount,
+                            systemImage: "pencil.and.scribble",
+                            unit: "WORDS",
+                            colors: [Color(red: 0.88, green: 0.48, blue: 0.34), Color(red: 0.74, green: 0.34, blue: 0.21)]
+                        )
                     }
                 }
-                .padding(20)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 28)
             }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Button("NOW") {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Today") {
                         store.returnToToday()
                     }
-                    .font(.footnote.bold())
-                    .accessibilityIdentifier("calendarNowButton")
+                    .accessibilityIdentifier("calendarTodayButton")
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -194,11 +139,143 @@ struct CalendarView: View {
         }
     }
 
+    private func calendarPanel(days: [CalendarDay]) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(alignment: .center, spacing: 16) {
+                Button {
+                    presentMonthPicker()
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(displayedMonthTitle)
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundStyle(.primary)
+
+                        Image(systemName: "chevron.right")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("calendarMonthPickerButton")
+
+                Spacer()
+
+                HStack(spacing: 12) {
+                    Button {
+                        store.previousMonth()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.indigo)
+                            .frame(width: 36, height: 36)
+                            .background(Color.indigo.opacity(0.10), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("calendarPreviousMonthButton")
+
+                    Button {
+                        store.nextMonth()
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.indigo)
+                            .frame(width: 36, height: 36)
+                            .background(Color.indigo.opacity(0.10), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("calendarNextMonthButton")
+                }
+            }
+
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(weekdaySymbols, id: \.self) { symbol in
+                    Text(symbol.uppercased())
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+
+                ForEach(days) { day in
+                    Button {
+                        store.goToJournal(for: day.date)
+                    } label: {
+                        VStack(spacing: 6) {
+                            ZStack {
+                                Circle()
+                                    .fill(day.isSelected ? Color.indigo.opacity(0.18) : Color.clear)
+                                    .frame(width: 34, height: 34)
+
+                                Text("\(day.dayNumber)")
+                                    .font(.body.weight(day.isSelected ? .bold : .medium))
+                                    .foregroundStyle(day.isInDisplayedMonth ? Color.primary : Color.secondary.opacity(0.45))
+                            }
+
+                            Circle()
+                                .fill(day.hasJournalEntries ? Color.indigo : Color.clear)
+                                .frame(width: 6, height: 6)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("calendarDay-\(day.key)")
+                }
+            }
+        }
+        .padding(24)
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .shadow(color: Color.black.opacity(0.06), radius: 18, y: 8)
+    }
+
     private func presentMonthPicker() {
         pickerSelection = CalendarPickerSelection(
             year: displayedYear,
             month: displayedMonthValue
         )
         isShowingMonthPicker = true
+    }
+}
+
+private struct StatisticCard: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    let unit: String
+    let colors: [Color]
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .tracking(1.5)
+                .foregroundStyle(.white.opacity(0.88))
+                .lineLimit(1)
+
+            Text(value)
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .minimumScaleFactor(0.6)
+                .foregroundStyle(.white)
+
+            Image(systemName: systemImage)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
+
+            Text(unit)
+                .font(.caption.weight(.bold))
+                .tracking(1.5)
+                .foregroundStyle(.white.opacity(0.88))
+        }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 172)
+        .padding(.horizontal, 10)
+        .background(
+            LinearGradient(
+                colors: colors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
+        .shadow(color: colors.last?.opacity(0.22) ?? .clear, radius: 16, y: 8)
     }
 }

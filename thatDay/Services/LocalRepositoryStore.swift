@@ -49,13 +49,15 @@ struct LocalRepositoryStore {
     func makeSnapshot(
         entries: [EntryRecord],
         updatedAt: Date = Date(),
-        embeddingImages: Bool = false
+        embeddingImages: Bool = false,
+        blogTags: [String] = RepositorySnapshot.defaultBlogTags
     ) throws -> RepositorySnapshot {
         let embeddedImages = embeddingImages ? try embeddedImages(for: entries) : []
         return RepositorySnapshot(
             entries: entries,
             updatedAt: updatedAt,
-            embeddedImages: embeddedImages
+            embeddedImages: embeddedImages,
+            blogTags: blogTags
         )
     }
 

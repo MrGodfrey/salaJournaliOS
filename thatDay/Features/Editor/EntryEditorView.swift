@@ -21,6 +21,7 @@ struct EntryEditorView: View {
                 kind: session.kind,
                 title: session.entry?.title ?? "",
                 body: session.entry?.body ?? "",
+                blogTag: session.entry?.blogTag ?? (session.kind == .blog ? store.defaultBlogTag : nil),
                 happenedAt: session.entry?.happenedAt ?? session.defaultDate
             )
         )
@@ -34,7 +35,8 @@ struct EntryEditorView: View {
                     selectedPhoto: $selectedPhoto,
                     importedImageData: importedImageData,
                     existingImageURL: session.entry.flatMap { store.imageURL(for: $0) },
-                    imageRefreshVersion: store.imageRefreshVersion
+                    imageRefreshVersion: store.imageRefreshVersion,
+                    blogTags: store.blogTags
                 )
             }
             .navigationTitle(session.mode == .create ? "New \(session.kind.title)" : "Edit \(session.kind.title)")

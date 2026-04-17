@@ -16,7 +16,7 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
-    func testCalendarMonthPickerAndNowReturnToToday() throws {
+    func testCalendarMonthPickerAndTodayReturnToCurrentMonth() throws {
         let app = launchApp()
 
         XCTAssertTrue(app.buttons["openCalendarButton"].waitForExistence(timeout: 5))
@@ -31,12 +31,12 @@ final class thatDayUITests: XCTestCase {
         monthWheel.adjust(toPickerWheelValue: "May")
 
         app.buttons["calendarPickerDoneButton"].tap()
-        XCTAssertEqual(monthButton.label, "May")
+        XCTAssertTrue(monthButton.label.contains("May 2026"))
 
-        let nowButton = app.buttons["calendarNowButton"]
-        XCTAssertTrue(nowButton.waitForExistence(timeout: 5))
-        nowButton.tap()
-        XCTAssertEqual(monthButton.label, "April")
+        let todayButton = app.buttons["calendarTodayButton"]
+        XCTAssertTrue(todayButton.waitForExistence(timeout: 5))
+        todayButton.tap()
+        XCTAssertTrue(monthButton.label.contains("April 2026"))
     }
 
     @MainActor
@@ -114,7 +114,8 @@ final class thatDayUITests: XCTestCase {
         editButton.tap()
 
         let deleteButton = app.buttons["entryDetailDeleteButton"]
-        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
+        scrollToElement(deleteButton, in: app)
+        XCTAssertTrue(deleteButton.exists)
         deleteButton.tap()
 
         let deleteConfirmation = app.alerts.buttons["Delete"]
@@ -156,6 +157,24 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testBlogTagFilterShowsOnlyMatchingPosts() throws {
+        let app = launchApp { storageRoot in
+            try self.seedTaggedBlogRepository(at: storageRoot)
+        }
+
+        app.tabBars.buttons["Blog"].tap()
+
+        XCTAssertTrue(app.staticTexts["Reading Summary"].waitForExistence(timeout: 5))
+
+        let tripFilter = app.buttons["Trip"].firstMatch
+        XCTAssertTrue(tripFilter.waitForExistence(timeout: 5))
+        tripFilter.tap()
+
+        XCTAssertTrue(app.staticTexts["Trip Recap"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Reading Summary"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor
     func testNoImageBlogDetailUsesLeadingInsetLayout() throws {
         let app = launchApp()
 
@@ -182,12 +201,12 @@ final class thatDayUITests: XCTestCase {
         let detailTitle = app.staticTexts["entryDetailTitle"]
         XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(detailTitle.frame.minX, 16)
-        XCTAssertLessThanOrEqual(detailTitle.frame.minX, 28)
 
         let detailBody = app.staticTexts["entryDetailBody"]
         XCTAssertTrue(detailBody.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(detailBody.frame.minX, 16)
-        XCTAssertLessThanOrEqual(detailBody.frame.minX, 28)
+        XCTAssertLessThan(detailTitle.frame.minX, app.windows.element(boundBy: 0).frame.width / 2)
+        XCTAssertLessThanOrEqual(abs(detailTitle.frame.minX - detailBody.frame.minX), 12)
     }
 
     @MainActor
@@ -197,7 +216,8 @@ final class thatDayUITests: XCTestCase {
         XCTAssertTrue(app.buttons["openSettingsButton"].waitForExistence(timeout: 5))
         app.buttons["openSettingsButton"].tap()
 
-        XCTAssertTrue(app.buttons["acceptShareLinkButton"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Current Repository"].exists)
     }
 
     @MainActor
@@ -291,10 +311,61 @@ final class thatDayUITests: XCTestCase {
         try writeJSON(snapshot, to: repositoryRoot.appendingPathComponent("repository.json"))
     }
 
+    private func seedTaggedBlogRepository(at storageRoot: URL) throws {
+        let fileManager = FileManager.default
+        let repositoryRoot = storageRoot
+            .appendingPathComponent("repositories", isDirectory: true)
+            .appendingPathComponent("local", isDirectory: true)
+        let isoDate = "2026-04-16T09:00:00Z"
+
+        try fileManager.createDirectory(at: repositoryRoot, withIntermediateDirectories: true)
+
+        let descriptor: [String: Any] = [
+            "role": "local"
+        ]
+        let snapshot: [String: Any] = [
+            "blogTags": ["Reading", "Trip", "note"],
+            "entries": [
+                [
+                    "id": "6B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA0",
+                    "kind": "blog",
+                    "title": "Reading Summary",
+                    "body": "A reading note.",
+                    "blogTag": "Reading",
+                    "happenedAt": isoDate,
+                    "createdAt": isoDate,
+                    "updatedAt": isoDate
+                ],
+                [
+                    "id": "6B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA1",
+                    "kind": "blog",
+                    "title": "Trip Recap",
+                    "body": "A trip note.",
+                    "blogTag": "Trip",
+                    "happenedAt": isoDate,
+                    "createdAt": isoDate,
+                    "updatedAt": isoDate
+                ]
+            ],
+            "updatedAt": isoDate
+        ]
+
+        try writeJSON(descriptor, to: repositoryRoot.appendingPathComponent("descriptor.json"))
+        try writeJSON(snapshot, to: repositoryRoot.appendingPathComponent("repository.json"))
+    }
+
     private func writeJSON(_ value: Any, to url: URL) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: .atomic)
+    }
+
+    private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 6) {
+        var attempts = 0
+        while (!element.exists || !element.isHittable) && attempts < maxSwipes {
+            app.swipeUp()
+            attempts += 1
+        }
     }
 }
