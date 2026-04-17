@@ -114,3 +114,18 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
     - 单元测试 `18/18` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-36-43-+0800.xcresult`
+
+## 2026-04-17 15:44
+
+- 共享仓库更新提醒补上应用角标：
+  - 共享仓库在应用未打开期间收到远端更新时，会把应用角标置为 `1`
+  - 只要应用进入前台，或者用户关闭“共享仓库更新提醒”，就会立即清空角标
+  - 前台自动刷新仍然保留现有通知链路，但不会在应用已经打开后再把角标补回去
+- `README.md` 同步补充共享更新角标规则和设置项说明
+- 新增单元测试：
+  - `testSharedRepositoryPushRefreshSetsBadgeAndActiveClearsIt`
+  - `testForegroundRefreshDoesNotRestoreBadgeAfterAppOpens`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `20/20` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_15-43-41-+0800.xcresult`

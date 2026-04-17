@@ -607,6 +607,177 @@ final class thatDayTests: XCTestCase {
         XCTAssertTrue(didStopAccessing)
     }
 
+    @MainActor
+    func testSharedRepositoryPushRefreshSetsBadgeAndActiveClearsIt() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let updatedDate = fixtureDate("2026-04-16T11:00:00Z")
+        let entryID = UUID()
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    id: entryID,
+                    kind: .blog,
+                    title: "Shared Blog",
+                    body: "Old content",
+                    happenedAt: initialDate,
+                    createdAt: initialDate,
+                    updatedAt: initialDate
+                )
+            ],
+            updatedAt: initialDate
+        )
+        let updatedSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    id: entryID,
+                    kind: .blog,
+                    title: "Shared Blog Updated",
+                    body: "New content",
+                    happenedAt: initialDate,
+                    createdAt: initialDate,
+                    updatedAt: updatedDate
+                )
+            ],
+            updatedAt: updatedDate
+        )
+
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(initialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "共享仓库",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: true
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = initialSnapshot
+        var badgeCounts: [Int] = []
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T12:00:00Z") },
+            setApplicationBadgeCount: { badgeCounts.append($0) }
+        )
+
+        await store.loadIfNeeded()
+        XCTAssertEqual(badgeCounts.last, 0)
+
+        await store.handleScenePhaseChange(.background)
+        cloudService.loadedSnapshot = updatedSnapshot
+        await store.refreshSharedRepositories(trigger: .push)
+
+        XCTAssertEqual(badgeCounts.last, 1)
+
+        await store.handleScenePhaseChange(.active)
+        XCTAssertEqual(badgeCounts.last, 0)
+    }
+
+    @MainActor
+    func testForegroundRefreshDoesNotRestoreBadgeAfterAppOpens() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let updatedDate = fixtureDate("2026-04-16T11:00:00Z")
+        let entryID = UUID()
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    id: entryID,
+                    kind: .blog,
+                    title: "Shared Blog",
+                    body: "Old content",
+                    happenedAt: initialDate,
+                    createdAt: initialDate,
+                    updatedAt: initialDate
+                )
+            ],
+            updatedAt: initialDate
+        )
+        let updatedSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    id: entryID,
+                    kind: .blog,
+                    title: "Shared Blog Updated",
+                    body: "New content",
+                    happenedAt: initialDate,
+                    createdAt: initialDate,
+                    updatedAt: updatedDate
+                )
+            ],
+            updatedAt: updatedDate
+        )
+
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(initialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "共享仓库",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: true
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = initialSnapshot
+        var badgeCounts: [Int] = []
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T12:00:00Z") },
+            setApplicationBadgeCount: { badgeCounts.append($0) }
+        )
+
+        await store.loadIfNeeded()
+        await store.handleScenePhaseChange(.active)
+
+        cloudService.loadedSnapshot = updatedSnapshot
+        await store.refreshSharedRepositories(trigger: .foreground)
+
+        XCTAssertEqual(badgeCounts.last, 0)
+        XCTAssertFalse(badgeCounts.contains(1))
+    }
+
     func testImportArchiveMapsNoPermissionToUserFacingError() async throws {
         let rootURL = makeTempDirectory()
         let destinationStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("destination", isDirectory: true))

@@ -77,7 +77,7 @@
 | 想统一查 Journal 和 Blog | `Search` 对两类内容统一检索，空查询不返回结果 |
 | 一台设备上可能有多座仓库 | 支持本地仓库、共享仓库、默认仓库切换和最近打开排序 |
 | 想备份、迁移或恢复数据 | 支持当前仓库导出 ZIP、导入 ZIP、清空当前仓库 |
-| 共享仓库变化后想及时知道 | 支持 CloudKit 共享、Journal / Blog 下拉刷新、应用启动和回到前台自动拉取、远端刷新、本地通知和通知点击跳转 |
+| 共享仓库变化后想及时知道 | 支持 CloudKit 共享、Journal / Blog 下拉刷新、应用启动和回到前台自动拉取、远端刷新、本地通知、应用角标和通知点击跳转 |
 | 共享仓库里的图片也要跟着走 | 共享快照会同时携带正文和本地图片，拉取后自动恢复到当前设备缓存 |
 | 插图不能无限膨胀 | 选图后会自动压缩并保证单张图片保存到 `100KB` 以下 |
 
@@ -111,6 +111,7 @@
 - 全局层统一承载忙碌态、生物识别锁层、编辑器 sheet、设置页 sheet 和错误 alert
 - 如果启用了生物识别解锁，应用打开或从后台回到前台时会先要求验证
 - 应用启动和每次回到前台时，都会自动拉取已接入共享仓库的最新快照
+- 如果共享仓库在应用未打开期间收到远端更新，应用角标会置为 `1`；只要应用进入前台，角标就会立刻清零
 
 ### 3.2 Journal
 
@@ -161,7 +162,7 @@
 1. 查看当前仓库名称和当前权限
 2. 选择共享邀请权限并生成 CloudKit 邀请
 3. 接受别人发来的 iCloud 共享链接
-4. 开关“共享仓库更新提醒”
+4. 开关“共享仓库更新提醒”（本地通知 + 应用角标）
 5. 开关生物识别解锁（Face ID / Touch ID）
 6. 导出当前仓库 ZIP
 7. 导入 ZIP 到当前仓库
@@ -264,9 +265,10 @@ Application Support/thatDay/
 - `CloudRepositoryService` 负责把整仓库快照保存到 CloudKit 的 `CKRecordZone`
 - `thatDayApp.swift` 负责接住 scene/app 生命周期、远端推送和共享接受事件
 - `AppEventBridge.swift` 里的 `RepositoryRemoteChangeCenter` / `NotificationRouteCenter` 负责把系统事件桥接回 `AppStore`
-- `AppStore` 负责在前台刷新共享仓库、比对快照差异、生成本地通知，以及在点击通知后切换到对应仓库和文章
+- `AppStore` 负责在前台刷新共享仓库、比对快照差异、生成本地通知和应用角标，以及在点击通知后切换到对应仓库和文章
 - 共享所有者仍使用 `CKRecordZoneSubscription`；共享成员改用 `CKDatabaseSubscription` 监听 shared database，避免 shared database 不支持 zone subscription 的 CloudKit 报错
 - Journal / Blog 的手动下拉刷新和应用回到前台时的自动刷新，都复用同一条共享仓库拉取链路
+- 角标不再跟“是否读过某篇文章”绑定，只要共享更新发生在应用未打开期间就标 `1`，应用进入前台后立即清零
 
 ### 4.7 图片插入与压缩链路
 

@@ -96,9 +96,12 @@ final class AppStore {
     private let repositoryArchiveService = RepositoryArchiveService()
     private let now: () -> Date
     private let authenticateBiometricsAction: (String) async throws -> Void
+    private let setApplicationBadgeCount: (Int) -> Void
     private let calendar: Calendar
 
     private var didLoad = false
+    private var hasLoadedPreferences = false
+    private var isApplicationActive = false
     private var preferences = AppPreferences()
     private var shouldRequireAuthenticationOnNextActive = false
 
@@ -129,13 +132,17 @@ final class AppStore {
         cloudService: any CloudRepositoryServicing,
         calendar: Calendar = .current,
         now: @escaping () -> Date = Date.init,
-        authenticateBiometrics: @escaping (String) async throws -> Void = AppStore.systemAuthenticateBiometrics
+        authenticateBiometrics: @escaping (String) async throws -> Void = AppStore.systemAuthenticateBiometrics,
+        setApplicationBadgeCount: @escaping (Int) -> Void = { badgeCount in
+            UNUserNotificationCenter.current().setBadgeCount(badgeCount) { _ in }
+        }
     ) {
         self.libraryStore = libraryStore
         self.cloudService = cloudService
         self.calendar = calendar
         self.now = now
         authenticateBiometricsAction = authenticateBiometrics
+        self.setApplicationBadgeCount = setApplicationBadgeCount
 
         let initialDate = calendar.startOfDay(for: now())
         selectedDate = initialDate
@@ -280,12 +287,14 @@ final class AppStore {
         }
 
         didLoad = true
+        clearApplicationBadge()
         isBusy = true
         defer { isBusy = false }
 
         do {
             repositories = try libraryStore.loadCatalog()
             preferences = try libraryStore.loadPreferences()
+            hasLoadedPreferences = true
             let launchRepositoryID = repositories.contains(where: { $0.id == preferences.defaultRepositoryID })
                 ? preferences.defaultRepositoryID
                 : RepositoryReference.localRepositoryID
@@ -626,6 +635,7 @@ final class AppStore {
     func updateSharedUpdateNotificationEnabled(_ isEnabled: Bool) async {
         if !isEnabled {
             setSharedUpdateNotificationEnabled(false)
+            clearApplicationBadge()
             return
         }
 
@@ -782,6 +792,16 @@ final class AppStore {
     }
 
     func handleScenePhaseChange(_ phase: ScenePhase) async {
+        isApplicationActive = phase == .active
+
+        if phase == .active {
+            clearApplicationBadge()
+        }
+
+        guard hasLoadedPreferences else {
+            return
+        }
+
         guard preferences.isBiometricLockEnabled else {
             isAuthenticationRequired = false
             shouldRequireAuthenticationOnNextActive = false
@@ -1027,8 +1047,13 @@ final class AppStore {
             return
         }
 
+        let shouldApplyBadge = shouldApplySharedUpdateBadge(for: trigger)
+        if shouldApplyBadge {
+            setApplicationBadgeCount(1)
+        }
+
         if trigger != .launch {
-            await scheduleLocalNotification(notification)
+            await scheduleLocalNotification(notification, includeBadge: shouldApplyBadge)
         }
     }
 
@@ -1077,11 +1102,14 @@ final class AppStore {
         )
     }
 
-    private func scheduleLocalNotification(_ notification: RepositoryUpdateNotification) async {
+    private func scheduleLocalNotification(_ notification: RepositoryUpdateNotification, includeBadge: Bool) async {
         let content = UNMutableNotificationContent()
         content.title = notification.title
         content.body = notification.body
         content.sound = .default
+        if includeBadge {
+            content.badge = 1
+        }
         content.userInfo = [
             LocalNotificationPayload.repositoryIDKey: notification.repositoryID,
             LocalNotificationPayload.entryIDKey: notification.entryID.uuidString
@@ -1094,6 +1122,14 @@ final class AppStore {
         )
 
         try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    private func clearApplicationBadge() {
+        setApplicationBadgeCount(0)
+    }
+
+    private func shouldApplySharedUpdateBadge(for trigger: SharedRepositoryRefreshTrigger) -> Bool {
+        trigger == .push && !isApplicationActive
     }
 
     private static func systemAuthenticateBiometrics(reason: String) async throws {
