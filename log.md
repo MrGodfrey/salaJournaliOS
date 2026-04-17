@@ -349,3 +349,22 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testMovingBlogTagRelativeToAnotherTagPersists -only-testing:thatDayUITests/thatDayUITests/testSettingsSheetOpensFromJournal -only-testing:thatDayUITests/thatDayUITests/testSettingsBlogTagsReorderWithLongPressDrag`
     - 定向测试 `3/3` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_18-47-59-+0800.xcresult`
+
+## 2026-04-17 19:06
+
+- 删除新安装应用里的 `Welcome to thatDay` 引导页：
+  - 本地仓库首次启动不再预置示例 Journal，默认以空仓库进入 `Journal`
+  - 首装时会立即持久化空快照，避免后续重新加载时把欢迎页写回来
+  - 预览 / 异常回退路径也统一改为空数据，避免再次出现同一条欢迎内容
+- `README.md` 已同步更新：
+  - 补充首次进入时默认显示空仓库与空状态，不再出现 `Welcome to thatDay`
+- 新增 / 更新测试：
+  - 新增单元测试 `testFreshInstallStartsWithEmptyLocalRepository`
+  - 新增 UI 测试 `testFreshInstallShowsEmptyJournalInsteadOfWelcomeEntry`
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `30/30` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_19-04-44-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testFreshInstallShowsEmptyJournalInsteadOfWelcomeEntry -only-testing:thatDayUITests/thatDayUITests/testSearchRequiresQueryBeforeShowingResults`
+    - 定向 UI 测试 `2/2` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_19-05-25-+0800.xcresult`

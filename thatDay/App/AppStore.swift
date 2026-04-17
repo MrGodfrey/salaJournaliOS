@@ -340,7 +340,7 @@ final class AppStore {
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
             if entries.isEmpty {
-                entries = SampleData.makeEntries()
+                entries = []
                 blogTags = RepositorySnapshot.defaultBlogTags
             }
         }
@@ -1118,9 +1118,9 @@ final class AppStore {
                 markAsOpened: true
             )
         } else if currentRepositoryID == RepositoryReference.localRepositoryID {
-            entries = SampleData.makeEntries()
+            entries = []
             blogTags = RepositorySnapshot.defaultBlogTags
-            let snapshot = RepositorySnapshot(entries: entries, updatedAt: now())
+            let snapshot = RepositorySnapshot(entries: entries, updatedAt: now(), blogTags: blogTags)
             try repositoryStore.saveDescriptor(.local)
             try repositoryStore.saveSnapshot(snapshot)
             repositoryDescriptor = .local
@@ -1515,7 +1515,7 @@ private struct RepositoryUpdateNotification {
 
 private struct PreviewCloudRepositoryService: CloudRepositoryServicing {
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot {
-        RepositorySnapshot(entries: SampleData.makeEntries())
+        RepositorySnapshot(entries: [], blogTags: RepositorySnapshot.defaultBlogTags)
     }
 
     func saveSnapshot(_ snapshot: RepositorySnapshot, using descriptor: RepositoryDescriptor) async throws -> RepositoryDescriptor {
@@ -1545,7 +1545,7 @@ private struct PreviewCloudRepositoryService: CloudRepositoryServicing {
     func acceptShare(from url: URL) async throws -> AcceptedSharedRepository {
         AcceptedSharedRepository(
             descriptor: RepositoryDescriptor(zoneName: "preview-zone", zoneOwnerName: "_owner_", shareRecordName: "preview-share", role: .viewer),
-            snapshot: RepositorySnapshot(entries: SampleData.makeEntries()),
+            snapshot: RepositorySnapshot(entries: [], blogTags: RepositorySnapshot.defaultBlogTags),
             displayName: "Shared Repository"
         )
     }

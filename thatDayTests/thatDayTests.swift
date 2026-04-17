@@ -38,6 +38,26 @@ final class thatDayTests: XCTestCase {
     }
 
     @MainActor
+    func testFreshInstallStartsWithEmptyLocalRepository() async throws {
+        let storageRoot = makeTempDirectory()
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            rootURL: storageRoot
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertTrue(store.entries.isEmpty)
+        XCTAssertEqual(store.blogTags, RepositorySnapshot.defaultBlogTags)
+
+        let localStore = RepositoryLibraryStore(rootURL: storageRoot)
+            .repositoryStore(for: RepositoryReference.localRepositoryID)
+        let snapshot = try XCTUnwrap(localStore.loadSnapshot())
+        XCTAssertTrue(snapshot.entries.isEmpty)
+        XCTAssertEqual(snapshot.blogTags, RepositorySnapshot.defaultBlogTags)
+    }
+
+    @MainActor
     func testSearchMatchesJournalAndBlogContent() async throws {
         let entries = [
             makeEntry(title: "Morning Journal", happenedAt: fixtureDate("2026-04-16T09:00:00Z")),

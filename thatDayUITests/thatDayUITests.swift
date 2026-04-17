@@ -6,6 +6,14 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testFreshInstallShowsEmptyJournalInsteadOfWelcomeEntry() throws {
+        let app = launchApp()
+
+        XCTAssertTrue(app.staticTexts["No journal entries on this day"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Welcome to thatDay"].exists)
+    }
+
+    @MainActor
     func testSearchRequiresQueryBeforeShowingResults() throws {
         let app = launchApp()
 
