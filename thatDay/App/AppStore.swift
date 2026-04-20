@@ -125,6 +125,7 @@ final class AppStore {
     private(set) var repositories: [RepositoryReference] = [.local]
     private(set) var currentRepositoryID = RepositoryReference.localRepositoryID
     private(set) var blogTags: [String] = RepositorySnapshot.defaultBlogTags
+    private(set) var repositorySharedUpdateNotificationScope: SharedUpdateNotificationScope = .all
 
     init(
         libraryStore: RepositoryLibraryStore,
@@ -190,6 +191,57 @@ final class AppStore {
 
     var isSharedUpdateNotificationEnabled: Bool {
         preferences.isSharedUpdateNotificationEnabled
+    }
+
+    var sharedUpdateNotificationScope: SharedUpdateNotificationScope {
+        preferences.sharedUpdateNotificationScope
+    }
+
+    var effectiveCurrentRepositoryNotificationScope: SharedUpdateNotificationScope {
+        effectiveNotificationScope(for: repositorySharedUpdateNotificationScope)
+    }
+
+    var canCreateShareInvite: Bool {
+        repositoryDescriptor.role.canCreateShareInvite
+    }
+
+    var canManageRepositoryNotificationScope: Bool {
+        repositoryDescriptor.role.canManageRepositoryNotificationScope
+    }
+
+    var isCurrentRepositoryNotificationScopeOverridingLocalPreference: Bool {
+        repositorySharedUpdateNotificationScope != .all
+    }
+
+    var repositoryNotificationScopeDescription: String {
+        switch repositoryDescriptor.role {
+        case .local:
+            if repositorySharedUpdateNotificationScope == .all {
+                return "When this repository is shared, members can use their own Push Updates preference."
+            }
+
+            return "When this repository is shared, every member will be limited to \(repositorySharedUpdateNotificationScope.summary.lowercased()) for this repository."
+        case .owner:
+            if repositorySharedUpdateNotificationScope == .all {
+                return "Members can use their own Push Updates preference while this repository stays on All."
+            }
+
+            return "This repository is locked to \(repositorySharedUpdateNotificationScope.summary.lowercased()) for every member. Personal Push Updates preferences are ignored here until you switch back to All."
+        case .editor, .viewer:
+            if repositorySharedUpdateNotificationScope == .all {
+                return "The owner allows each member to use their own Push Updates preference for this repository."
+            }
+
+            return "The owner locked this repository to \(repositorySharedUpdateNotificationScope.summary.lowercased()). Your personal Push Updates preference is ignored here until the owner switches back to All."
+        }
+    }
+
+    var personalNotificationScopeDescription: String {
+        if repositorySharedUpdateNotificationScope == .all {
+            return "This is your personal default. It applies to the current repository because the owner allows All."
+        }
+
+        return "This is still your personal default, but the current repository follows the owner's \(repositorySharedUpdateNotificationScope.title) rule instead."
     }
 
     var selectedDateTitle: String {
@@ -328,6 +380,7 @@ final class AppStore {
             if entries.isEmpty {
                 entries = []
                 blogTags = RepositorySnapshot.defaultBlogTags
+                repositorySharedUpdateNotificationScope = .all
             }
         }
     }
@@ -462,7 +515,11 @@ final class AppStore {
         let previousEntries = entries
         let previousBlogTags = blogTags
         blogTags.append(name)
-        await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
+        await persistCurrentRepositoryMutation(
+            previousEntries: previousEntries,
+            previousBlogTags: previousBlogTags,
+            previousRepositoryNotificationScope: repositorySharedUpdateNotificationScope
+        )
     }
 
     func moveBlogTags(fromOffsets source: IndexSet, toOffset destination: Int) async {
@@ -541,7 +598,11 @@ final class AppStore {
         }
         blogTags.removeAll { $0 == tag }
 
-        await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
+        await persistCurrentRepositoryMutation(
+            previousEntries: previousEntries,
+            previousBlogTags: previousBlogTags,
+            previousRepositoryNotificationScope: repositorySharedUpdateNotificationScope
+        )
     }
 
     func deleteEntry(_ entry: EntryRecord) async {
@@ -638,8 +699,8 @@ final class AppStore {
     }
 
     func presentSharingController() async {
-        guard canEditRepository else {
-            alertMessage = "Only users who can edit the repository can create a share invite."
+        guard canCreateShareInvite else {
+            alertMessage = "Only the repository owner can create a share invite."
             return
         }
 
@@ -651,7 +712,8 @@ final class AppStore {
                 entries: entries,
                 updatedAt: now(),
                 embeddingImages: true,
-                blogTags: blogTags
+                blogTags: blogTags,
+                sharedUpdateNotificationScope: repositorySharedUpdateNotificationScope
             )
             repositoryDescriptor = try await cloudService.saveSnapshot(snapshot, using: repositoryDescriptor)
             try currentRepositoryStore.saveDescriptor(repositoryDescriptor)
@@ -777,6 +839,37 @@ final class AppStore {
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
         }
+    }
+
+    func setSharedUpdateNotificationScope(_ scope: SharedUpdateNotificationScope) {
+        preferences.sharedUpdateNotificationScope = scope
+
+        do {
+            try libraryStore.savePreferences(preferences)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func updateRepositorySharedUpdateNotificationScope(_ scope: SharedUpdateNotificationScope) async {
+        guard canManageRepositoryNotificationScope else {
+            alertMessage = "Only the repository owner can change this repository's push update rule."
+            return
+        }
+
+        guard scope != repositorySharedUpdateNotificationScope else {
+            return
+        }
+
+        let previousEntries = entries
+        let previousBlogTags = blogTags
+        let previousRepositoryScope = repositorySharedUpdateNotificationScope
+        repositorySharedUpdateNotificationScope = scope
+        await persistCurrentRepositoryMutation(
+            previousEntries: previousEntries,
+            previousBlogTags: previousBlogTags,
+            previousRepositoryNotificationScope: previousRepositoryScope
+        )
     }
 
     func updateSharedUpdateNotificationEnabled(_ isEnabled: Bool) async {
@@ -1007,6 +1100,7 @@ final class AppStore {
     private func applySnapshot(_ snapshot: RepositorySnapshot) {
         let normalizedTags = RepositorySnapshot.normalizedBlogTags(snapshot.blogTags, entries: snapshot.entries)
         blogTags = normalizedTags
+        repositorySharedUpdateNotificationScope = snapshot.sharedUpdateNotificationScope
         selectedBlogTag = matchedBlogTag(for: selectedBlogTag, availableTags: normalizedTags)
         entries = normalizedEntries(snapshot.entries, using: normalizedTags)
     }
@@ -1055,7 +1149,11 @@ final class AppStore {
         })
     }
 
-    private func persistCurrentRepositoryMutation(previousEntries: [EntryRecord], previousBlogTags: [String]) async {
+    private func persistCurrentRepositoryMutation(
+        previousEntries: [EntryRecord],
+        previousBlogTags: [String],
+        previousRepositoryNotificationScope: SharedUpdateNotificationScope
+    ) async {
         isBusy = true
         defer { isBusy = false }
 
@@ -1064,6 +1162,7 @@ final class AppStore {
         } catch {
             entries = previousEntries
             blogTags = previousBlogTags
+            repositorySharedUpdateNotificationScope = previousRepositoryNotificationScope
             alertMessage = Self.userFacingMessage(for: error)
         }
     }
@@ -1076,7 +1175,11 @@ final class AppStore {
         let previousEntries = entries
         let previousBlogTags = blogTags
         blogTags = updatedBlogTags
-        await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
+        await persistCurrentRepositoryMutation(
+            previousEntries: previousEntries,
+            previousBlogTags: previousBlogTags,
+            previousRepositoryNotificationScope: repositorySharedUpdateNotificationScope
+        )
     }
 
     private func beginRepositoryMutation(for repositoryID: String) {
@@ -1146,7 +1249,13 @@ final class AppStore {
         } else if currentRepositoryID == RepositoryReference.localRepositoryID {
             entries = []
             blogTags = RepositorySnapshot.defaultBlogTags
-            let snapshot = RepositorySnapshot(entries: entries, updatedAt: now(), blogTags: blogTags)
+            repositorySharedUpdateNotificationScope = .all
+            let snapshot = RepositorySnapshot(
+                entries: entries,
+                updatedAt: now(),
+                blogTags: blogTags,
+                sharedUpdateNotificationScope: repositorySharedUpdateNotificationScope
+            )
             try repositoryStore.saveDescriptor(.local)
             try repositoryStore.saveSnapshot(snapshot)
             repositoryDescriptor = .local
@@ -1160,6 +1269,7 @@ final class AppStore {
         } else {
             entries = []
             blogTags = RepositorySnapshot.defaultBlogTags
+            repositorySharedUpdateNotificationScope = .all
         }
 
         if repositoryDescriptor.isCloudBacked {
@@ -1194,7 +1304,8 @@ final class AppStore {
             let snapshot = RepositorySnapshot(
                 entries: entries,
                 updatedAt: now(),
-                blogTags: blogTags
+                blogTags: blogTags,
+                sharedUpdateNotificationScope: repositorySharedUpdateNotificationScope
             )
             try repositoryStore.saveSnapshot(snapshot)
 
@@ -1204,7 +1315,8 @@ final class AppStore {
                     entries: entries,
                     updatedAt: snapshot.updatedAt,
                     embeddingImages: true,
-                    blogTags: blogTags
+                    blogTags: blogTags,
+                    sharedUpdateNotificationScope: repositorySharedUpdateNotificationScope
                 )
                 savedDescriptor = try await cloudService.saveSnapshot(cloudSnapshot, using: descriptorAtStart)
                 try repositoryStore.saveDescriptor(savedDescriptor)
@@ -1301,6 +1413,10 @@ final class AppStore {
         }
     }
 
+    private func effectiveNotificationScope(for repositoryScope: SharedUpdateNotificationScope) -> SharedUpdateNotificationScope {
+        repositoryScope == .all ? preferences.sharedUpdateNotificationScope : repositoryScope
+    }
+
     private func refreshRepository(_ reference: RepositoryReference, trigger: SharedRepositoryRefreshTrigger) async throws {
         let repositoryStore = libraryStore.repositoryStore(for: reference.id)
         let mutationGenerationBeforeLoad = repositoryMutationGeneration(for: reference.id)
@@ -1355,7 +1471,8 @@ final class AppStore {
               let notification = makeSharedRepositoryNotification(
                 for: reference,
                 previousEntries: previousSnapshot?.entries ?? [],
-                latestEntries: normalizedRemoteSnapshot.entries
+                latestEntries: normalizedRemoteSnapshot.entries,
+                repositoryNotificationScope: normalizedRemoteSnapshot.sharedUpdateNotificationScope
               ) else {
             return
         }
@@ -1373,8 +1490,10 @@ final class AppStore {
     private func makeSharedRepositoryNotification(
         for reference: RepositoryReference,
         previousEntries: [EntryRecord],
-        latestEntries: [EntryRecord]
+        latestEntries: [EntryRecord],
+        repositoryNotificationScope: SharedUpdateNotificationScope
     ) -> RepositoryUpdateNotification? {
+        let effectiveScope = effectiveNotificationScope(for: repositoryNotificationScope)
         let previousByID = Dictionary(uniqueKeysWithValues: previousEntries.map { ($0.id, $0) })
         let changedEntries = latestEntries.filter { entry in
             guard let previousEntry = previousByID[entry.id] else {
@@ -1386,6 +1505,7 @@ final class AppStore {
                 previousEntry.body != entry.body ||
                 previousEntry.imageReference != entry.imageReference
         }
+        .filter { effectiveScope.includes($0.kind) }
         .sorted { lhs, rhs in
             if lhs.updatedAt != rhs.updatedAt {
                 return lhs.updatedAt > rhs.updatedAt

@@ -23,7 +23,7 @@ final class thatDayUITests: XCTestCase {
 
         app.tabBars.buttons["Search"].tap()
 
-        XCTAssertTrue(app.textFields["searchField"].waitForExistence(timeout: 5))
+        XCTAssertTrue(searchField(in: app).waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Welcome to thatDay"].exists)
     }
 
@@ -218,12 +218,33 @@ final class thatDayUITests: XCTestCase {
 
         app.tabBars.buttons["Search"].tap()
 
-        let searchField = app.textFields["searchField"]
+        let searchField = searchField(in: app)
         XCTAssertTrue(searchField.waitForExistence(timeout: 5))
         searchField.tap()
         searchField.typeText("Searchable Blog Story")
 
         XCTAssertTrue(app.staticTexts["Searchable Blog Story"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testSearchClearButtonRemovesQueryAndHidesResults() throws {
+        let app = launchApp(seed: .taggedBlog)
+
+        app.tabBars.buttons["Search"].tap()
+
+        let searchField = searchField(in: app)
+        XCTAssertTrue(searchField.waitForExistence(timeout: 5))
+        searchField.tap()
+        searchField.typeText("Trip")
+
+        XCTAssertTrue(app.staticTexts["Trip Recap"].waitForExistence(timeout: 5))
+
+        let clearButton = clearButton(in: searchField)
+        XCTAssertTrue(clearButton.waitForExistence(timeout: 5))
+        clearButton.tap()
+
+        XCTAssertTrue(app.staticTexts["Start typing to search"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Trip Recap"].waitForExistence(timeout: 2))
     }
 
     @MainActor
@@ -464,6 +485,34 @@ final class thatDayUITests: XCTestCase {
         }
 
         return false
+    }
+
+    private func searchField(in app: XCUIApplication) -> XCUIElement {
+        let identifiedSearchField = app.searchFields["searchField"]
+        if identifiedSearchField.exists {
+            return identifiedSearchField
+        }
+
+        let identifiedTextField = app.textFields["searchField"]
+        if identifiedTextField.exists {
+            return identifiedTextField
+        }
+
+        return app.searchFields.firstMatch
+    }
+
+    private func clearButton(in searchField: XCUIElement) -> XCUIElement {
+        let clearTextButton = searchField.buttons["Clear text"]
+        if clearTextButton.exists {
+            return clearTextButton
+        }
+
+        let clearButton = searchField.buttons["Clear"]
+        if clearButton.exists {
+            return clearButton
+        }
+
+        return searchField.buttons.firstMatch
     }
 
     private func waitUntil(timeout: TimeInterval, condition: () -> Bool) -> Bool {

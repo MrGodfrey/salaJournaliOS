@@ -1,5 +1,6 @@
 import Observation
 import SwiftUI
+import UIKit
 
 struct SearchView: View {
     @Bindable var store: AppStore
@@ -13,12 +14,6 @@ struct SearchView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             List {
-                Section {
-                    TextField("Search titles or content", text: $store.searchText)
-                        .textInputAutocapitalization(.never)
-                        .accessibilityIdentifier("searchField")
-                }
-
                 if hasQuery {
                     Section {
                         if store.searchResults.isEmpty {
@@ -58,6 +53,16 @@ struct SearchView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                SearchBar(
+                    text: $store.searchText,
+                    placeholder: "Search titles or content"
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+                .background(Color(uiColor: .systemGroupedBackground))
+            }
             .navigationTitle("Search")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: EntryDestination.self) { destination in
@@ -83,6 +88,53 @@ struct SearchView: View {
                     .accessibilityIdentifier("searchOpenSettingsButton")
                 }
             }
+        }
+    }
+}
+
+private struct SearchBar: UIViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeUIView(context: Context) -> UISearchBar {
+        let searchBar = UISearchBar(frame: .zero)
+        searchBar.delegate = context.coordinator
+        searchBar.searchBarStyle = .minimal
+        searchBar.placeholder = placeholder
+        searchBar.returnKeyType = .search
+        searchBar.autocorrectionType = .default
+        searchBar.autocapitalizationType = .none
+        searchBar.enablesReturnKeyAutomatically = false
+        searchBar.accessibilityIdentifier = "searchField"
+        searchBar.searchTextField.accessibilityIdentifier = "searchField"
+        searchBar.searchTextField.clearButtonMode = .whileEditing
+        searchBar.searchTextField.autocapitalizationType = .none
+        return searchBar
+    }
+
+    func updateUIView(_ uiView: UISearchBar, context: Context) {
+        if uiView.text != text {
+            uiView.text = text
+        }
+    }
+
+    final class Coordinator: NSObject, UISearchBarDelegate {
+        @Binding private var text: String
+
+        init(text: Binding<String>) {
+            _text = text
+        }
+
+        func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+            text = searchText
+        }
+
+        func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+            searchBar.resignFirstResponder()
         }
     }
 }

@@ -28,6 +28,24 @@ nonisolated enum RepositoryRole: String, Codable, Sendable {
             false
         }
     }
+
+    var canCreateShareInvite: Bool {
+        switch self {
+        case .local, .owner:
+            true
+        case .editor, .viewer:
+            false
+        }
+    }
+
+    var canManageRepositoryNotificationScope: Bool {
+        switch self {
+        case .local, .owner:
+            true
+        case .editor, .viewer:
+            false
+        }
+    }
 }
 
 nonisolated enum ShareAccessOption: String, CaseIterable, Codable, Identifiable, Sendable {

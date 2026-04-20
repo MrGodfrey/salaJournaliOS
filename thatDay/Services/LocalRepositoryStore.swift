@@ -55,14 +55,16 @@ nonisolated struct LocalRepositoryStore {
         entries: [EntryRecord],
         updatedAt: Date = Date(),
         embeddingImages: Bool = false,
-        blogTags: [String] = RepositorySnapshot.defaultBlogTags
+        blogTags: [String] = RepositorySnapshot.defaultBlogTags,
+        sharedUpdateNotificationScope: SharedUpdateNotificationScope = .all
     ) throws -> RepositorySnapshot {
         let embeddedImages = embeddingImages ? try embeddedImages(for: entries) : []
         return RepositorySnapshot(
             entries: entries,
             updatedAt: updatedAt,
             embeddedImages: embeddedImages,
-            blogTags: blogTags
+            blogTags: blogTags,
+            sharedUpdateNotificationScope: sharedUpdateNotificationScope
         )
     }
 

@@ -585,3 +585,84 @@
     - 定向测试 `3/3` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_20-41-52-+0800.xcresult`
   - 运行期间仍有 Xcode 连接已接真机时常见的 `mobile.notification_proxy` / `The device is passcode protected` 噪声日志，但不影响 simulator 上的测试结果
+
+## 2026-04-20 21:09
+
+- 按 feature 拆分单元测试，移除原先 1579 行的 `thatDayTests.swift`，改为：
+  - `JournalTests.swift`
+  - `BlogTagTests.swift`
+  - `RoutingTests.swift`
+  - `SharingTests.swift`
+  - `ArchiveTests.swift`
+  - `BiometricTests.swift`
+  - `StorageTests.swift`
+  - `AppStoreTestSupport.swift`
+- 补齐 `AppStore` 公开 API 和失败路径覆盖：
+  - 新增 `deleteEntry(_:)`、`addBlogTag(named:)`、`moveBlogTags(fromOffsets:toOffset:)`
+  - 新增 `handleNotificationRoute(_:)`、`routeToEntry(_:)`、`consumeEntryOpenRequest(for:)`
+  - 新增 `setDefaultRepository(_:)`、`setSharedUpdateNotificationEnabled(_:)`、`setBiometricLockEnabled(_:)` 的 setter 持久化路径
+  - 新增 `acceptShare(metadata:)`、`exportCurrentRepository()`、`previousMonth()`、`nextMonth()`、`goToJournal(for:)`
+  - 新增 `unlockIfNeeded()` 的认证失败和用户取消分支
+- 补强边界值和 mock 能力：
+  - 字数统计新增 `0`、`999`、`1000` 边界用例，保留 `1100 -> 1.1K`
+  - 搜索新增大小写、重音、首尾空白和跨多个 blog tag 的匹配用例
+  - `MockCloudRepositoryService` 现在追踪 `loadSnapshot`、`ensureRepositorySubscription`、URL share 接受和 metadata share 接受调用
+  - `MockBiometricAuthenticator` 现在支持按次注入成功 / 失败结果
+- `README.md` 无需更新：本次仅调整测试组织和测试覆盖，不涉及用户可见行为、设置项、测试入口或运行方式
+- 验证记录：
+  - `xcodebuild test -scheme thatDay -destination 'id=8CC688D1-06E8-4A1D-BC56-8AE8A52BA492' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `57/57` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_21-08-26-+0800.xcresult`
+
+## 2026-04-20 21:21
+
+- Search 页搜索输入框改为 iOS 原生 `UISearchBar`：
+  - 保留原有统一检索 `Journal / Blog` 的逻辑
+  - 输入关键词时，右侧会出现系统自带的清除按钮，可一键清空当前内容
+  - 保留 `searchField` 无障碍标识，兼容现有 UI 自动化定位
+- Search UI 测试补充清除按钮回归覆盖：
+  - 新增 `testSearchClearButtonRemovesQueryAndHidesResults`
+  - 原有 Search 相关 UI tests 改为兼容 `SearchField`
+- `README.md` 已更新：补充 Search 页原生搜索栏和系统清除按钮的行为说明
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testSearchRequiresQueryBeforeShowingResults -only-testing:thatDayUITests/thatDayUITests/testCreateBlogPostAppearsInSearch -only-testing:thatDayUITests/thatDayUITests/testSearchClearButtonRemovesQueryAndHidesResults`
+    - 定向 UI 测试 `3/3` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_21-19-39-+0800.xcresult`
+
+## 2026-04-20 21:29
+
+- 设置页 `Notifications` 区域新增推送范围设置：
+  - 可在 `Journal / Blog / All` 三个选项里选择共享仓库更新提醒的推送范围
+  - 每次切换范围都会先弹确认框，确认后才持久化到偏好设置
+  - 提醒范围会直接作用于共享仓库更新的本地通知和应用角标判定，被排除的更新类型不再触发提醒
+- 偏好和兼容性补充：
+  - `AppPreferences` 新增 `sharedUpdateNotificationScope`
+  - 读取旧版 `preferences.json` 时，如果缺少该字段，会自动回退到 `All`
+- 测试与文档同步：
+  - `SharingTests` 新增推送范围持久化和过滤 badge 的回归用例
+  - `StorageTests` 新增旧版偏好文件迁移兼容用例
+  - `README.md` 已更新：补充通知范围设置和确认交互说明
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/SharingTests -only-testing:thatDayTests/StorageTests`
+    - 定向单元测试 `22/22` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_21-29-06-+0800.xcresult`
+
+## 2026-04-20 21:44
+
+- 共享仓库通知规则补成“仓库级优先，本地级兜底”：
+  - `CloudKit Sharing` 区域新增 `Repository Push Updates`，由仓库主人统一设置当前仓库允许推送 `Journal / Blog / All`
+  - 当主人把当前仓库设为 `Journal` 或 `Blog` 时，所有成员都强制按该规则收推送，本地 `Personal Push Updates` 对该仓库不再生效
+  - 只有主人把当前仓库设为 `All` 时，成员自己的 `Personal Push Updates` 才会重新接管当前仓库的推送范围
+  - 当前仓库最终生效的范围会在 `Notifications` 区域显示为 `Effective in This Repository`
+- 数据层与共享同步补充：
+  - `RepositorySnapshot` 新增 `sharedUpdateNotificationScope`，并随本地仓库保存、CloudKit 上传、分享接受和远端刷新一起同步
+  - 旧版仓库快照缺少该字段时会自动回退到 `All`
+  - 共享邀请按钮限制为仓库主人可见，避免共享成员在 `CloudKit Sharing` 区域看到自己无权完成的分享入口
+- 测试与文档同步：
+  - `SharingTests` 新增仓库级通知范围持久化、非主人禁止修改、主人规则覆盖本地偏好的回归用例
+  - `StorageTests` 新增旧版仓库快照兼容用例
+  - `README.md` 已更新：补充 `Repository Push Updates` 与 `Personal Push Updates` 的优先级说明
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/SharingTests -only-testing:thatDayTests/StorageTests`
+    - 定向单元测试 `26/26` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_21-44-04-+0800.xcresult`

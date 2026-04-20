@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var isShowingClearRepositoryConfirmation = false
     @State private var newBlogTagName = ""
     @State private var pendingBlogTagDeletion: BlogTagDeletionRequest?
+    @State private var pendingPersonalNotificationScopeConfirmation: SharedUpdateNotificationScope?
+    @State private var pendingRepositoryNotificationScopeConfirmation: SharedUpdateNotificationScope?
 
     var body: some View {
         NavigationStack {
@@ -36,109 +38,13 @@ struct SettingsView: View {
                     LabeledContent("Current Access", value: store.repositoryStatusTitle)
                 }
 
-                Section("Blog Tags") {
-                    ForEach(store.blogTags, id: \.self) { tag in
-                        blogTagRow(for: tag)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if store.canEditRepository && store.blogTags.count > 1 {
-                                    Button {
-                                        prepareBlogTagDeletion(tag)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                    .tint(.red)
-                                }
-                            }
-                    }
-                    .onMove(perform: moveBlogTags)
+                blogTagsSection
 
-                    if store.canEditRepository {
-                        HStack(spacing: 12) {
-                            TextField("New Tag", text: $newBlogTagName)
-                                .textInputAutocapitalization(.words)
-                                .accessibilityIdentifier("newBlogTagField")
+                cloudKitSharingSection
 
-                            Button("Add") {
-                                let tagName = newBlogTagName.trimmed
-                                guard !tagName.isEmpty else {
-                                    return
-                                }
+                openSharedRepositorySection
 
-                                newBlogTagName = ""
-                                Task {
-                                    await store.addBlogTag(named: tagName)
-                                }
-                            }
-                            .disabled(
-                                newBlogTagName.trimmed.isEmpty ||
-                                    store.blogTags.contains(where: {
-                                        $0.compare(newBlogTagName.trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-                                    })
-                            )
-                        }
-                    }
-
-                    Text(store.canEditRepository
-                         ? "Tags belong to the current repository. Drag a tag to reorder it, add new ones here, and deleting a used tag will first ask where its blog posts should move."
-                         : "The current repository is read-only, so blog tags can be viewed here but cannot be changed.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                if store.canEditRepository {
-                    Section("CloudKit Sharing") {
-                        Picker("Invite Access", selection: $store.shareAccessOption) {
-                            ForEach(ShareAccessOption.allCases) { option in
-                                Text(option.title).tag(option)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        Text(store.shareAccessOption.description)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        Button {
-                            Task {
-                                await store.presentSharingController()
-                            }
-                        } label: {
-                            Label("Create Share Link", systemImage: "person.badge.plus")
-                        }
-                        .accessibilityIdentifier("presentShareControllerButton")
-                    }
-                }
-
-                Section("Open Shared Repository") {
-                    TextField("https://www.icloud.com/share/...", text: $store.incomingShareLink, axis: .vertical)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        .accessibilityIdentifier("shareLinkTextField")
-
-                    Button {
-                        Task {
-                            await store.acceptIncomingShareLink()
-                        }
-                    } label: {
-                        Label("Open Shared Repository", systemImage: "link")
-                    }
-                    .accessibilityIdentifier("acceptShareLinkButton")
-                }
-
-                Section("Notifications") {
-                    Toggle("Shared Repository Update Alerts", isOn: Binding(
-                        get: { store.isSharedUpdateNotificationEnabled },
-                        set: { isEnabled in
-                            Task {
-                                await store.updateSharedUpdateNotificationEnabled(isEnabled)
-                            }
-                        }
-                    ))
-
-                    Text("Send a tappable system notification when a shared repository you joined adds or updates entries.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                notificationsSection
 
                 Section("Security") {
                     Toggle("Biometric Unlock", isOn: Binding(
@@ -155,56 +61,9 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Import / Export") {
-                    Button {
-                        Task {
-                            await store.exportCurrentRepository()
-                        }
-                    } label: {
-                        Label("Export Current Repository as ZIP", systemImage: "square.and.arrow.up")
-                    }
+                importExportSection
 
-                    Button {
-                        isShowingFileImporter = true
-                    } label: {
-                        Label("Import ZIP into Current Repository", systemImage: "square.and.arrow.down")
-                    }
-
-                    Text("Import replaces the current repository contents. Export creates a ZIP file and can continue in the background.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    if let transferProgress = store.transferProgress {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ProgressView(value: transferProgress.fractionCompleted)
-                            Text(transferProgress.statusText)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-
-                Section("Advanced") {
-                    Picker(
-                        "Default on Launch",
-                        selection: Binding(
-                            get: { store.defaultRepositoryID },
-                            set: { repositoryID in
-                                store.setDefaultRepository(repositoryID)
-                            }
-                        )
-                    ) {
-                        ForEach(store.sortedRepositories) { repository in
-                            Text(repository.displayName).tag(repository.id)
-                        }
-                    }
-
-                    Button("Clear Current Repository", role: .destructive) {
-                        isShowingClearRepositoryConfirmation = true
-                    }
-                    .disabled(!store.canEditRepository)
-                }
+                advancedSection
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -228,6 +87,56 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("All entries and images in the current repository will be deleted. This action cannot be undone.")
+            }
+            .alert(
+                "Change personal push updates?",
+                isPresented: Binding(
+                    get: { pendingPersonalNotificationScopeConfirmation != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            pendingPersonalNotificationScopeConfirmation = nil
+                        }
+                    }
+                ),
+                presenting: pendingPersonalNotificationScopeConfirmation
+            ) {
+                scope in
+                Button("Change to \(scope.title)") {
+                    store.setSharedUpdateNotificationScope(scope)
+                }
+
+                Button("Cancel", role: .cancel) {
+                    pendingPersonalNotificationScopeConfirmation = nil
+                }
+            } message: {
+                scope in
+                Text("\(scope.summary) will be saved as your personal default. Repositories whose owner selects Journal or Blog will ignore this setting.")
+            }
+            .alert(
+                "Change repository push updates?",
+                isPresented: Binding(
+                    get: { pendingRepositoryNotificationScopeConfirmation != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            pendingRepositoryNotificationScopeConfirmation = nil
+                        }
+                    }
+                ),
+                presenting: pendingRepositoryNotificationScopeConfirmation
+            ) {
+                scope in
+                Button("Change to \(scope.title)") {
+                    Task {
+                        await store.updateRepositorySharedUpdateNotificationScope(scope)
+                    }
+                }
+
+                Button("Cancel", role: .cancel) {
+                    pendingRepositoryNotificationScopeConfirmation = nil
+                }
+            } message: {
+                scope in
+                Text(repositoryNotificationScopeChangeMessage(for: scope))
             }
             .alert(
                 pendingBlogTagDeletion?.title ?? "Delete Tag?",
@@ -283,6 +192,233 @@ struct SettingsView: View {
             .sheet(item: $store.exportedArchiveItem) { item in
                 ActivityViewController(activityItems: [item.url])
             }
+        }
+    }
+
+    private var cloudKitSharingSection: some View {
+        Section("CloudKit Sharing") {
+            if store.canCreateShareInvite {
+                Picker("Invite Access", selection: $store.shareAccessOption) {
+                    ForEach(ShareAccessOption.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(store.shareAccessOption.description)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    Task {
+                        await store.presentSharingController()
+                    }
+                } label: {
+                    Label("Create Share Link", systemImage: "person.badge.plus")
+                }
+                .accessibilityIdentifier("presentShareControllerButton")
+            }
+
+            if store.canManageRepositoryNotificationScope {
+                Picker("Repository Push Updates", selection: Binding(
+                    get: { store.repositorySharedUpdateNotificationScope },
+                    set: { scope in
+                        guard scope != store.repositorySharedUpdateNotificationScope else {
+                            return
+                        }
+
+                        pendingRepositoryNotificationScopeConfirmation = scope
+                    }
+                )) {
+                    ForEach(SharedUpdateNotificationScope.allCases) { scope in
+                        Text(scope.title).tag(scope)
+                    }
+                }
+                .accessibilityIdentifier("repositorySharedUpdateNotificationScopePicker")
+            } else {
+                LabeledContent("Repository Push Updates", value: store.repositorySharedUpdateNotificationScope.title)
+            }
+
+            Text(store.repositoryNotificationScopeDescription)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var blogTagsSection: some View {
+        Section("Blog Tags") {
+            ForEach(store.blogTags, id: \.self) { tag in
+                blogTagRow(for: tag)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if store.canEditRepository && store.blogTags.count > 1 {
+                            Button {
+                                prepareBlogTagDeletion(tag)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            .tint(.red)
+                        }
+                    }
+            }
+            .onMove(perform: moveBlogTags)
+
+            if store.canEditRepository {
+                HStack(spacing: 12) {
+                    TextField("New Tag", text: $newBlogTagName)
+                        .textInputAutocapitalization(.words)
+                        .accessibilityIdentifier("newBlogTagField")
+
+                    Button("Add") {
+                        addBlogTag()
+                    }
+                    .disabled(isAddBlogTagDisabled)
+                }
+            }
+
+            Text(blogTagsDescription)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var openSharedRepositorySection: some View {
+        Section("Open Shared Repository") {
+            TextField("https://www.icloud.com/share/...", text: $store.incomingShareLink, axis: .vertical)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                .accessibilityIdentifier("shareLinkTextField")
+
+            Button {
+                Task {
+                    await store.acceptIncomingShareLink()
+                }
+            } label: {
+                Label("Open Shared Repository", systemImage: "link")
+            }
+            .accessibilityIdentifier("acceptShareLinkButton")
+        }
+    }
+
+    private var notificationsSection: some View {
+        Section("Notifications") {
+            Toggle("Shared Repository Update Alerts", isOn: Binding(
+                get: { store.isSharedUpdateNotificationEnabled },
+                set: { isEnabled in
+                    Task {
+                        await store.updateSharedUpdateNotificationEnabled(isEnabled)
+                    }
+                }
+            ))
+
+            Picker("Personal Push Updates", selection: Binding(
+                get: { store.sharedUpdateNotificationScope },
+                set: { scope in
+                    guard scope != store.sharedUpdateNotificationScope else {
+                        return
+                    }
+
+                    pendingPersonalNotificationScopeConfirmation = scope
+                }
+            )) {
+                ForEach(SharedUpdateNotificationScope.allCases) { scope in
+                    Text(scope.title).tag(scope)
+                }
+            }
+            .accessibilityIdentifier("sharedUpdateNotificationScopePicker")
+
+            LabeledContent("Effective in This Repository", value: store.effectiveCurrentRepositoryNotificationScope.title)
+
+            Text(store.personalNotificationScopeDescription)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var importExportSection: some View {
+        Section("Import / Export") {
+            Button {
+                Task {
+                    await store.exportCurrentRepository()
+                }
+            } label: {
+                Label("Export Current Repository as ZIP", systemImage: "square.and.arrow.up")
+            }
+
+            Button {
+                isShowingFileImporter = true
+            } label: {
+                Label("Import ZIP into Current Repository", systemImage: "square.and.arrow.down")
+            }
+
+            Text("Import replaces the current repository contents. Export creates a ZIP file and can continue in the background.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if let transferProgress = store.transferProgress {
+                VStack(alignment: .leading, spacing: 8) {
+                    ProgressView(value: transferProgress.fractionCompleted)
+                    Text(transferProgress.statusText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private var advancedSection: some View {
+        Section("Advanced") {
+            Picker(
+                "Default on Launch",
+                selection: Binding(
+                    get: { store.defaultRepositoryID },
+                    set: { repositoryID in
+                        store.setDefaultRepository(repositoryID)
+                    }
+                )
+            ) {
+                ForEach(store.sortedRepositories) { repository in
+                    Text(repository.displayName).tag(repository.id)
+                }
+            }
+
+            Button("Clear Current Repository", role: .destructive) {
+                isShowingClearRepositoryConfirmation = true
+            }
+            .disabled(!store.canEditRepository)
+        }
+    }
+
+    private func repositoryNotificationScopeChangeMessage(for scope: SharedUpdateNotificationScope) -> String {
+        if scope == .all {
+            return "Everyone in this repository can use their own personal Push Updates setting again."
+        }
+
+        return "Everyone in this repository will be limited to \(scope.summary.lowercased()). Personal Push Updates settings will be ignored here until you switch back to All."
+    }
+
+    private var isAddBlogTagDisabled: Bool {
+        let normalizedName = newBlogTagName.trimmed
+        return normalizedName.isEmpty || store.blogTags.contains(where: {
+            $0.compare(normalizedName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        })
+    }
+
+    private var blogTagsDescription: String {
+        store.canEditRepository
+            ? "Tags belong to the current repository. Drag a tag to reorder it, add new ones here, and deleting a used tag will first ask where its blog posts should move."
+            : "The current repository is read-only, so blog tags can be viewed here but cannot be changed."
+    }
+
+    private func addBlogTag() {
+        let tagName = newBlogTagName.trimmed
+        guard !tagName.isEmpty else {
+            return
+        }
+
+        newBlogTagName = ""
+        Task {
+            await store.addBlogTag(named: tagName)
         }
     }
 
