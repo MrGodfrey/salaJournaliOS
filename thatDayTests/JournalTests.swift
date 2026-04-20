@@ -289,7 +289,7 @@ final class JournalTests: AppStoreTestCase {
         await store.loadIfNeeded()
 
         XCTAssertEqual(store.writtenWordCount, 1_000)
-        XCTAssertEqual(store.formattedWrittenWordCount, "1K")
+        XCTAssertEqual(store.formattedWrittenWordCount, "1.00K")
     }
 
     @MainActor
@@ -309,6 +309,46 @@ final class JournalTests: AppStoreTestCase {
         await store.loadIfNeeded()
 
         XCTAssertEqual(store.writtenWordCount, 1_100)
-        XCTAssertEqual(store.formattedWrittenWordCount, "1.1K")
+        XCTAssertEqual(store.formattedWrittenWordCount, "1.10K")
+    }
+
+    @MainActor
+    func testWrittenWordCountRoundsToThreeSignificantDigitsWithoutExtraDecimal() async throws {
+        let largeBody = words(100_198)
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: [
+                makeEntry(
+                    title: "Big Count",
+                    body: largeBody,
+                    happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+                )
+            ]
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.writtenWordCount, 100_200)
+        XCTAssertEqual(store.formattedWrittenWordCount, "100K")
+    }
+
+    @MainActor
+    func testWrittenWordCountPromotesToNextAbbreviationWhenRoundedValueHitsOneThousand() async throws {
+        let largeBody = words(999_498)
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: [
+                makeEntry(
+                    title: "Huge Count",
+                    body: largeBody,
+                    happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+                )
+            ]
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.writtenWordCount, 999_500)
+        XCTAssertEqual(store.formattedWrittenWordCount, "1.00M")
     }
 }

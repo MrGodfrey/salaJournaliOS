@@ -1577,25 +1577,46 @@ final class AppStore {
             return String(value)
         }
 
+        let abbreviations = ["K", "M", "B", "T"]
         let formatter = NumberFormatter()
         formatter.locale = AppLanguage.locale
         formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = 1
-        formatter.minimumFractionDigits = 0
 
-        let abbreviation: String
-        let scaledValue: Double
-        switch value {
-        case 1_000_000...:
-            abbreviation = "M"
-            scaledValue = Double(value) / 1_000_000
-        default:
-            abbreviation = "K"
-            scaledValue = Double(value) / 1_000
+        var scaledValue = Double(value) / 1000
+        var abbreviationIndex = 0
+
+        while scaledValue >= 1000, abbreviationIndex < abbreviations.count - 1 {
+            scaledValue /= 1000
+            abbreviationIndex += 1
         }
 
-        let formatted = formatter.string(from: NSNumber(value: scaledValue)) ?? String(format: "%.1f", scaledValue)
-        return formatted + abbreviation
+        while true {
+            let fractionDigits: Int
+            switch scaledValue {
+            case 100...:
+                fractionDigits = 0
+            case 10...:
+                fractionDigits = 1
+            default:
+                fractionDigits = 2
+            }
+
+            let roundingFactor = pow(10.0, Double(fractionDigits))
+            let roundedValue = (scaledValue * roundingFactor).rounded() / roundingFactor
+
+            if roundedValue >= 1000, abbreviationIndex < abbreviations.count - 1 {
+                scaledValue = roundedValue / 1000
+                abbreviationIndex += 1
+                continue
+            }
+
+            formatter.minimumFractionDigits = fractionDigits
+            formatter.maximumFractionDigits = fractionDigits
+
+            let formatted = formatter.string(from: NSNumber(value: roundedValue))
+                ?? String(format: "%.\(fractionDigits)f", roundedValue)
+            return formatted + abbreviations[abbreviationIndex]
+        }
     }
 
     private static func systemAuthenticateBiometrics(reason: String) async throws {

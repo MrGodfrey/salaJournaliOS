@@ -322,13 +322,17 @@ private struct StatisticCard: View {
 
             Text(value)
                 .font(.system(size: 28, weight: .bold, design: .rounded))
-                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+                .minimumScaleFactor(0.34)
+                .allowsTightening(true)
+                .monospacedDigit()
                 .foregroundStyle(.white)
 
             Text(unit)
                 .font(.caption.weight(.bold))
                 .tracking(1.5)
                 .foregroundStyle(.white.opacity(0.88))
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
         .frame(minHeight: 112)

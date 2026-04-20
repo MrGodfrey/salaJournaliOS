@@ -666,3 +666,20 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/SharingTests -only-testing:thatDayTests/StorageTests`
     - 定向单元测试 `26/26` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_21-44-04-+0800.xcresult`
+
+## 2026-04-20 22:01
+
+- `Calendar` 的 `Written` 统计卡片更新数字缩写规则：
+  - 超过 `999` 后统一改为三位有效数字加单位缩写，例如 `1.00K`、`10.0K`、`100K`、`1.00M`
+  - 当四舍五入后的值跨过当前单位上限时，会自动进位到下一个单位，例如 `999.5K -> 1.00M`
+- 统计卡片在窄屏设备上改为优先缩放数字并保持单行，避免 `Written` 数值被折成两行
+- 测试与文档同步：
+  - `JournalTests` 更新并补充字数缩写边界用例
+  - `README.md` 已更新：补充新的三位有效数字规则和窄屏单行显示说明
+
+## 2026-04-20 22:04
+
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-journal-2204 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/JournalTests`
+    - 定向单元测试 `18/18` 通过
+    - `xcresult`: `/tmp/thatDay-journal-2204/Logs/Test/Test-thatDay-2026.04.20_22-03-22-+0800.xcresult`
