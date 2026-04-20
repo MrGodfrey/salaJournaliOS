@@ -1,6 +1,6 @@
 import Foundation
 
-struct EntryDraft: Equatable, Sendable {
+nonisolated struct EntryDraft: Equatable, Sendable {
     var kind: EntryKind
     var title: String
     var body: String

@@ -24,6 +24,7 @@ final class thatDayTests: XCTestCase {
         XCTAssertEqual(store.journalEntries.map(\.title), ["2026", "2025", "2024", "2023"])
     }
 
+    @MainActor
     func testJournalCardDateIncludesWeekdayBeforeYear() {
         let entry = makeEntry(
             title: "Weekday Journal",
@@ -916,7 +917,7 @@ final class thatDayTests: XCTestCase {
 
         try sourceStore.saveDescriptor(.local)
         try sourceStore.saveSnapshot(snapshot)
-        try sourceStore.storeImage(data: try XCTUnwrap(makePreviewImageData()), suggestedID: snapshot.entries[0].id)
+        _ = try sourceStore.storeImage(data: try XCTUnwrap(makePreviewImageData()), suggestedID: snapshot.entries[0].id)
 
         let service = RepositoryArchiveService()
         let zipURL = try await service.exportArchive(
@@ -936,9 +937,8 @@ final class thatDayTests: XCTestCase {
     }
 
     func testRepositoryArchiveRoundTripRestoresImagesForTmpSymlinkPaths() async throws {
-        let rootURL = URL(fileURLWithPath: "/tmp/thatDay-archive-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.removeItem(at: rootURL)
-        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        let rootURL = try makeSymlinkedTempDirectory()
+        XCTAssertNotEqual(rootURL.path, rootURL.resolvingSymlinksInPath().path)
 
         let sourceStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("source", isDirectory: true))
         let destinationStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("destination", isDirectory: true))
@@ -1343,6 +1343,17 @@ final class thatDayTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func makeSymlinkedTempDirectory() throws -> URL {
+        let containerURL = makeTempDirectory()
+        let targetURL = containerURL.appendingPathComponent("real-root", isDirectory: true)
+        let symlinkURL = containerURL.appendingPathComponent("tmp", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: targetURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: targetURL)
+
+        return symlinkURL
     }
 
     private func makePreviewImageData() -> Data? {

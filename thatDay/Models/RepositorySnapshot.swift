@@ -1,13 +1,13 @@
 import Foundation
 
-struct RepositoryImageAsset: Codable, Hashable, Sendable, Identifiable {
+nonisolated struct RepositoryImageAsset: Codable, Hashable, Sendable, Identifiable {
     var id: String { reference }
 
     var reference: String
     var data: Data
 }
 
-struct RepositorySnapshot: Codable, Hashable, Sendable {
+nonisolated struct RepositorySnapshot: Codable, Hashable, Sendable {
     static let defaultBlogTags = ["Reading", "Watching", "Game", "Trip", "note"]
 
     var version: Int = 2

@@ -1,6 +1,7 @@
 import CloudKit
 import Combine
 import SwiftUI
+import UIKit
 import UserNotifications
 
 @main
@@ -19,6 +20,9 @@ struct thatDayApp: App {
         if processInfo.environment["THATDAY_RESET_STORAGE"] == "1" {
             try? FileManager.default.removeItem(at: libraryStore.rootURL)
         }
+        if let seedScenario = processInfo.uiTestSeedScenario {
+            try? seedScenario.prepare(in: libraryStore)
+        }
 
         let referenceDate = AppStore.referenceDate(from: processInfo.environment)
         _store = State(
@@ -27,7 +31,10 @@ struct thatDayApp: App {
                 cloudService: CloudRepositoryService(
                     containerIdentifier: processInfo.environment["THATDAY_CLOUDKIT_CONTAINER"] ?? "iCloud.yu.thatDay"
                 ),
-                now: { referenceDate ?? Date() }
+                now: { referenceDate ?? Date() },
+                setApplicationBadgeCount: processInfo.isRunningUITests ? { _ in } : { badgeCount in
+                    UNUserNotificationCenter.current().setBadgeCount(badgeCount) { _ in }
+                }
             )
         )
     }
@@ -72,7 +79,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        application.registerForRemoteNotifications()
+        if !ProcessInfo.processInfo.isRunningUITests {
+            application.registerForRemoteNotifications()
+        }
         return true
     }
 
@@ -128,6 +137,181 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             CloudShareDeliveryCenter.shared.enqueue(metadata)
         }
+    }
+}
+
+private extension ProcessInfo {
+    var isRunningUITests: Bool {
+        environment["THATDAY_UI_TEST_MODE"] == "1"
+    }
+
+    var uiTestSeedScenario: UITestSeedScenario? {
+        guard let rawValue = environment["THATDAY_UI_TEST_SEED"]?.trimmed.nilIfEmpty else {
+            return nil
+        }
+
+        return UITestSeedScenario(rawValue: rawValue)
+    }
+}
+
+private enum UITestSeedScenario: String {
+    case taggedBlog = "tagged-blog"
+    case portraitBlog = "portrait-blog"
+    case readOnlyRepository = "read-only-repository"
+
+    func prepare(in libraryStore: RepositoryLibraryStore) throws {
+        switch self {
+        case .taggedBlog:
+            try prepareTaggedBlogRepository(in: libraryStore)
+        case .portraitBlog:
+            try preparePortraitBlogRepository(in: libraryStore)
+        case .readOnlyRepository:
+            try prepareReadOnlyRepository(in: libraryStore)
+        }
+    }
+
+    private func prepareTaggedBlogRepository(in libraryStore: RepositoryLibraryStore) throws {
+        let repositoryStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let happenedAt = Self.fixtureDate("2026-04-16T09:00:00Z")
+
+        try repositoryStore.saveDescriptor(.local)
+        try repositoryStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    EntryRecord(
+                        id: UUID(uuidString: "6B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA0") ?? UUID(),
+                        kind: .blog,
+                        title: "Reading Summary",
+                        body: "A reading note.",
+                        blogTag: "Reading",
+                        happenedAt: happenedAt,
+                        createdAt: happenedAt,
+                        updatedAt: happenedAt
+                    ),
+                    EntryRecord(
+                        id: UUID(uuidString: "6B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA1") ?? UUID(),
+                        kind: .blog,
+                        title: "Trip Recap",
+                        body: "A trip note.",
+                        blogTag: "Trip",
+                        happenedAt: happenedAt,
+                        createdAt: happenedAt,
+                        updatedAt: happenedAt
+                    )
+                ],
+                updatedAt: happenedAt,
+                blogTags: ["Reading", "Trip", "note"]
+            )
+        )
+        try libraryStore.savePreferences(AppPreferences())
+    }
+
+    private func preparePortraitBlogRepository(in libraryStore: RepositoryLibraryStore) throws {
+        let repositoryStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let happenedAt = Self.fixtureDate("2026-04-16T09:00:00Z")
+        let entryID = UUID(uuidString: "7BFC7E5E-EBB3-46D0-B2D0-A9CE4B63B8B2") ?? UUID()
+        let imageReference = try repositoryStore.storeImage(data: Self.makePortraitSeedImageData(), suggestedID: entryID)
+
+        try repositoryStore.saveDescriptor(.local)
+        try repositoryStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    EntryRecord(
+                        id: entryID,
+                        kind: .blog,
+                        title: "Interstellar (2014)",
+                        body: "A profound exploration of love and gravity, Nolan folds intimacy into cosmic scale.",
+                        blogTag: "Watching",
+                        blogImageLayout: .portrait,
+                        happenedAt: happenedAt,
+                        createdAt: happenedAt,
+                        updatedAt: happenedAt,
+                        imageReference: imageReference
+                    )
+                ],
+                updatedAt: happenedAt,
+                blogTags: ["Watching", "note"]
+            )
+        )
+        try libraryStore.savePreferences(AppPreferences())
+    }
+
+    private func prepareReadOnlyRepository(in libraryStore: RepositoryLibraryStore) throws {
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let repositoryID = "read-only-repository"
+        let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
+        let happenedAt = Self.fixtureDate("2026-04-16T09:00:00Z")
+        let descriptor = RepositoryDescriptor(zoneName: nil, zoneOwnerName: nil, shareRecordName: nil, role: .viewer)
+
+        try localStore.saveDescriptor(.local)
+        try repositoryStore.saveDescriptor(descriptor)
+        try repositoryStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    EntryRecord(
+                        id: UUID(uuidString: "2B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA0") ?? UUID(),
+                        kind: .journal,
+                        title: "Read-Only Journal",
+                        body: "This repository should hide create actions.",
+                        happenedAt: happenedAt,
+                        createdAt: happenedAt,
+                        updatedAt: happenedAt
+                    ),
+                    EntryRecord(
+                        id: UUID(uuidString: "2B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA1") ?? UUID(),
+                        kind: .blog,
+                        title: "Read-Only Blog",
+                        body: "Blog creation should also be hidden.",
+                        happenedAt: happenedAt,
+                        createdAt: happenedAt,
+                        updatedAt: happenedAt
+                    )
+                ],
+                updatedAt: happenedAt
+            )
+        )
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "Read-Only Repository",
+                descriptor: descriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: happenedAt,
+                subscribedAt: happenedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+    }
+
+    private static func fixtureDate(_ rawValue: String) -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: rawValue) ?? .now
+    }
+
+    private static func makePortraitSeedImageData() -> Data {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 240, height: 420))
+        let image = renderer.image { context in
+            UIColor(red: 0.08, green: 0.12, blue: 0.23, alpha: 1).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 240, height: 420))
+
+            UIColor(red: 0.71, green: 0.82, blue: 0.96, alpha: 1).setFill()
+            context.fill(CGRect(x: 24, y: 28, width: 192, height: 192))
+
+            UIColor.white.withAlphaComponent(0.8).setFill()
+            context.fill(CGRect(x: 34, y: 250, width: 172, height: 20))
+            context.fill(CGRect(x: 34, y: 286, width: 140, height: 16))
+            context.fill(CGRect(x: 34, y: 316, width: 120, height: 16))
+        }
+
+        return image.pngData() ?? Data()
     }
 }
 

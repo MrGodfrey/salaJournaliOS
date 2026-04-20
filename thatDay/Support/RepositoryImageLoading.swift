@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 
 extension URL {
-    var repositoryLocalImage: UIImage? {
+    nonisolated var repositoryLocalImage: UIImage? {
         guard isFileURL else {
             return nil
         }

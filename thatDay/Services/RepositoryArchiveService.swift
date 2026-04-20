@@ -1,6 +1,6 @@
 import Foundation
 
-enum RepositoryArchiveError: LocalizedError {
+nonisolated enum RepositoryArchiveError: LocalizedError {
     case invalidArchive
     case importPermissionDenied
     case invalidRepositoryPath
@@ -17,14 +17,14 @@ enum RepositoryArchiveError: LocalizedError {
     }
 }
 
-private struct RepositoryArchiveManifest: Codable {
+private nonisolated struct RepositoryArchiveManifest: Codable {
     var version = 1
     var exportedAt: Date
     var repositoryID: String
     var repositoryName: String
 }
 
-struct RepositoryArchiveService {
+nonisolated struct RepositoryArchiveService {
     private let extractArchive: (URL, URL) throws -> Void
     private let startAccessingSecurityScopedResource: (URL) -> Bool
     private let stopAccessingSecurityScopedResource: (URL) -> Void
@@ -203,7 +203,7 @@ struct RepositoryArchiveService {
     }
 }
 
-private enum SimpleZipArchive {
+private nonisolated enum SimpleZipArchive {
     private struct Entry {
         let path: String
         let data: Data
@@ -358,7 +358,7 @@ private enum SimpleZipArchive {
     }
 }
 
-private enum CRC32 {
+private nonisolated enum CRC32 {
     private static let polynomial: UInt32 = 0xEDB88320
     private static let table: [UInt32] = {
         (0..<256).map { index in
@@ -385,14 +385,14 @@ private enum CRC32 {
 }
 
 private extension Data {
-    mutating func append<T: FixedWidthInteger>(littleEndian value: T) {
+    nonisolated mutating func append<T: FixedWidthInteger>(littleEndian value: T) {
         var normalizedValue = value.littleEndian
         Swift.withUnsafeBytes(of: &normalizedValue) { buffer in
             append(buffer.bindMemory(to: UInt8.self))
         }
     }
 
-    func readUInt16(at offset: Int) throws -> UInt16 {
+    nonisolated func readUInt16(at offset: Int) throws -> UInt16 {
         guard offset + 2 <= count else {
             throw RepositoryArchiveError.invalidArchive
         }
@@ -402,7 +402,7 @@ private extension Data {
         return low | high
     }
 
-    func readUInt32(at offset: Int) throws -> UInt32 {
+    nonisolated func readUInt32(at offset: Int) throws -> UInt32 {
         guard offset + 4 <= count else {
             throw RepositoryArchiveError.invalidArchive
         }

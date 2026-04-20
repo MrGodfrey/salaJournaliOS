@@ -1,6 +1,6 @@
 import Foundation
 
-enum EntryKind: String, CaseIterable, Codable, Identifiable, Sendable {
+nonisolated enum EntryKind: String, CaseIterable, Codable, Identifiable, Sendable {
     case journal
     case blog
 
@@ -25,7 +25,7 @@ enum EntryKind: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
-enum BlogCardImageLayout: String, CaseIterable, Codable, Identifiable, Sendable {
+nonisolated enum BlogCardImageLayout: String, CaseIterable, Codable, Identifiable, Sendable {
     case landscape
     case portrait
 
@@ -41,7 +41,7 @@ enum BlogCardImageLayout: String, CaseIterable, Codable, Identifiable, Sendable 
     }
 }
 
-struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
+nonisolated struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var kind: EntryKind
     var title: String
@@ -127,22 +127,27 @@ struct EntryRecord: Identifiable, Codable, Hashable, Sendable {
         return normalizedBody.prefix(117) + "..."
     }
 
+    @MainActor
     var weekdayTitle: String {
         AppLanguage.weekdayTitle(for: happenedAt)
     }
 
+    @MainActor
     var timelineTitle: String {
         AppLanguage.timelineTitle(for: happenedAt)
     }
 
+    @MainActor
     var cardDateTitle: String {
         AppLanguage.cardDateTitle(for: happenedAt)
     }
 
+    @MainActor
     var journalCardDateTitle: String {
         AppLanguage.journalCardDateTitle(for: happenedAt)
     }
 
+    @MainActor
     var yearTitle: String {
         AppLanguage.yearTitle(for: happenedAt)
     }

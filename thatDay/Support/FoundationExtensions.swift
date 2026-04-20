@@ -2,16 +2,16 @@ import Foundation
 import NaturalLanguage
 
 extension String {
-    var trimmed: String {
+    nonisolated var trimmed: String {
         trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var nilIfEmpty: String? {
+    nonisolated var nilIfEmpty: String? {
         let value = trimmed
         return value.isEmpty ? nil : value
     }
 
-    var writtenWordCount: Int {
+    nonisolated var writtenWordCount: Int {
         let tokenizer = NLTokenizer(unit: .word)
         tokenizer.string = self
         let ignoredScalars = CharacterSet.whitespacesAndNewlines
@@ -37,24 +37,24 @@ extension String {
 }
 
 extension Substring {
-    static func + (lhs: Substring, rhs: String) -> String {
+    nonisolated static func + (lhs: Substring, rhs: String) -> String {
         String(lhs) + rhs
     }
 }
 
 extension Calendar {
-    func isSameMonthDay(_ lhs: Date, _ rhs: Date) -> Bool {
+    nonisolated func isSameMonthDay(_ lhs: Date, _ rhs: Date) -> Bool {
         let lhsComponents = dateComponents([.month, .day], from: lhs)
         let rhsComponents = dateComponents([.month, .day], from: rhs)
         return lhsComponents.month == rhsComponents.month && lhsComponents.day == rhsComponents.day
     }
 
-    func startOfMonth(for date: Date) -> Date {
+    nonisolated func startOfMonth(for date: Date) -> Date {
         let components = dateComponents([.year, .month], from: date)
         return self.date(from: components) ?? date
     }
 
-    func dayIdentifier(for date: Date) -> String {
+    nonisolated func dayIdentifier(for date: Date) -> String {
         let components = dateComponents([.year, .month, .day], from: date)
         let year = components.year ?? 0
         let month = components.month ?? 0

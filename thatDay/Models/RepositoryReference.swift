@@ -1,11 +1,11 @@
 import Foundation
 
-enum RepositorySource: String, Codable, Hashable, Sendable {
+nonisolated enum RepositorySource: String, Codable, Hashable, Sendable {
     case local
     case shared
 }
 
-struct RepositoryReference: Identifiable, Codable, Hashable, Sendable {
+nonisolated struct RepositoryReference: Identifiable, Codable, Hashable, Sendable {
     static let localRepositoryID = "local"
 
     var id: String

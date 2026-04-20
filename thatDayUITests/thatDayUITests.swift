@@ -4,6 +4,9 @@ import UIKit
 final class thatDayUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
+        addUIInterruptionMonitor(withDescription: "App and System Alerts") { alert in
+            self.dismissAlert(alert)
+        }
     }
 
     @MainActor
@@ -225,9 +228,7 @@ final class thatDayUITests: XCTestCase {
 
     @MainActor
     func testBlogTagFilterShowsOnlyMatchingPosts() throws {
-        let app = launchApp { storageRoot in
-            try self.seedTaggedBlogRepository(at: storageRoot)
-        }
+        let app = launchApp(seed: .taggedBlog)
 
         app.tabBars.buttons["Blog"].tap()
 
@@ -243,9 +244,7 @@ final class thatDayUITests: XCTestCase {
 
     @MainActor
     func testPortraitBlogCardUsesSideBySideLayout() throws {
-        let app = launchApp { storageRoot in
-            try self.seedPortraitBlogRepository(at: storageRoot)
-        }
+        let app = launchApp(seed: .portraitBlog)
 
         app.tabBars.buttons["Blog"].tap()
 
@@ -257,9 +256,7 @@ final class thatDayUITests: XCTestCase {
 
     @MainActor
     func testPortraitBlogDetailCapsCoverHeightWithoutCroppingWidth() throws {
-        let app = launchApp { storageRoot in
-            try self.seedPortraitBlogRepository(at: storageRoot)
-        }
+        let app = launchApp(seed: .portraitBlog)
 
         app.tabBars.buttons["Blog"].tap()
 
@@ -276,9 +273,7 @@ final class thatDayUITests: XCTestCase {
 
     @MainActor
     func testCalendarTagStatisticOpensBlogWithMatchingFilter() throws {
-        let app = launchApp { storageRoot in
-            try self.seedTaggedBlogRepository(at: storageRoot)
-        }
+        let app = launchApp(seed: .taggedBlog)
 
         app.tabBars.buttons["Calendar"].tap()
 
@@ -298,9 +293,7 @@ final class thatDayUITests: XCTestCase {
 
     @MainActor
     func testCalendarTagStatisticsUseContentWidth() throws {
-        let app = launchApp { storageRoot in
-            try self.seedTaggedBlogRepository(at: storageRoot)
-        }
+        let app = launchApp(seed: .taggedBlog)
 
         app.tabBars.buttons["Calendar"].tap()
 
@@ -369,9 +362,7 @@ final class thatDayUITests: XCTestCase {
 
     @MainActor
     func testSettingsBlogTagsReorderWithLongPressDrag() throws {
-        let app = launchApp { storageRoot in
-            try self.seedTaggedBlogRepository(at: storageRoot)
-        }
+        let app = launchApp(seed: .taggedBlog)
 
         XCTAssertTrue(app.buttons["openSettingsButton"].waitForExistence(timeout: 5))
         app.buttons["openSettingsButton"].tap()
@@ -402,9 +393,7 @@ final class thatDayUITests: XCTestCase {
 
     @MainActor
     func testReadOnlyRepositoryHidesCreateButtonsInJournalAndBlog() throws {
-        let app = launchApp { storageRoot in
-            try self.seedReadOnlyRepository(at: storageRoot)
-        }
+        let app = launchApp(seed: .readOnlyRepository)
 
         XCTAssertTrue(app.buttons["openSettingsButton"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["addJournalEntryButton"].waitForExistence(timeout: 2))
@@ -413,198 +402,68 @@ final class thatDayUITests: XCTestCase {
         XCTAssertFalse(app.buttons["addBlogEntryButton"].waitForExistence(timeout: 2))
     }
 
-    private func launchApp(prepareStorage: ((URL) throws -> Void)? = nil) -> XCUIApplication {
+    private func launchApp(seed: UITestSeedScenario? = nil) -> XCUIApplication {
         let app = XCUIApplication()
-        let storageRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("thatDay-ui-\(UUID().uuidString)", isDirectory: true)
-
-        if let prepareStorage {
-            do {
-                try prepareStorage(storageRoot)
-            } catch {
-                XCTFail("Failed to prepare storage: \(error)")
-            }
-        }
-
-        app.launchEnvironment["THATDAY_STORAGE_ROOT"] = storageRoot.path
-        app.launchEnvironment["THATDAY_RESET_STORAGE"] = prepareStorage == nil ? "1" : "0"
+        app.launchEnvironment["THATDAY_STORAGE_ROOT"] = "thatDay-ui-\(UUID().uuidString)"
+        app.launchEnvironment["THATDAY_RESET_STORAGE"] = "1"
         app.launchEnvironment["THATDAY_REFERENCE_DATE"] = "2026-04-16T09:00:00Z"
+        app.launchEnvironment["THATDAY_UI_TEST_MODE"] = "1"
+        if let seed {
+            app.launchEnvironment["THATDAY_UI_TEST_SEED"] = seed.rawValue
+        }
         app.launch()
+        app.tap()
+        dismissBlockingAlertIfPresent(in: app)
         return app
     }
 
-    private func seedReadOnlyRepository(at storageRoot: URL) throws {
-        let fileManager = FileManager.default
-        let repositoriesRoot = storageRoot.appendingPathComponent("repositories", isDirectory: true)
-        let repositoryID = "read-only-repository"
-        let repositoryRoot = repositoriesRoot.appendingPathComponent(repositoryID, isDirectory: true)
-        let isoDate = "2026-04-16T09:00:00Z"
-
-        try fileManager.createDirectory(at: repositoryRoot, withIntermediateDirectories: true)
-
-        let descriptor: [String: Any] = [
-            "role": "viewer"
-        ]
-        let snapshot: [String: Any] = [
-            "entries": [
-                [
-                    "id": "2B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA0",
-                    "kind": "journal",
-                    "title": "Read-Only Journal",
-                    "body": "This repository should hide create actions.",
-                    "happenedAt": isoDate,
-                    "createdAt": isoDate,
-                    "updatedAt": isoDate
-                ],
-                [
-                    "id": "2B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA1",
-                    "kind": "blog",
-                    "title": "Read-Only Blog",
-                    "body": "Blog creation should also be hidden.",
-                    "happenedAt": isoDate,
-                    "createdAt": isoDate,
-                    "updatedAt": isoDate
-                ]
-            ],
-            "updatedAt": isoDate,
-            "embeddedImages": []
-        ]
-        let catalog: [[String: Any]] = [
-            [
-                "id": repositoryID,
-                "displayName": "Read-Only Repository",
-                "descriptor": descriptor,
-                "source": "shared",
-                "lastKnownSnapshotUpdatedAt": isoDate,
-                "subscribedAt": isoDate
-            ]
-        ]
-        let preferences: [String: Any] = [
-            "defaultRepositoryID": repositoryID,
-            "isBiometricLockEnabled": false,
-            "isSharedUpdateNotificationEnabled": false
-        ]
-
-        try writeJSON(catalog, to: storageRoot.appendingPathComponent("repositories.json"))
-        try writeJSON(preferences, to: storageRoot.appendingPathComponent("preferences.json"))
-        try writeJSON(descriptor, to: repositoryRoot.appendingPathComponent("descriptor.json"))
-        try writeJSON(snapshot, to: repositoryRoot.appendingPathComponent("repository.json"))
-    }
-
-    private func seedTaggedBlogRepository(at storageRoot: URL) throws {
-        let fileManager = FileManager.default
-        let repositoryRoot = storageRoot
-            .appendingPathComponent("repositories", isDirectory: true)
-            .appendingPathComponent("local", isDirectory: true)
-        let isoDate = "2026-04-16T09:00:00Z"
-
-        try fileManager.createDirectory(at: repositoryRoot, withIntermediateDirectories: true)
-
-        let descriptor: [String: Any] = [
-            "role": "local"
-        ]
-        let snapshot: [String: Any] = [
-            "blogTags": ["Reading", "Trip", "note"],
-            "entries": [
-                [
-                    "id": "6B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA0",
-                    "kind": "blog",
-                    "title": "Reading Summary",
-                    "body": "A reading note.",
-                    "blogTag": "Reading",
-                    "happenedAt": isoDate,
-                    "createdAt": isoDate,
-                    "updatedAt": isoDate
-                ],
-                [
-                    "id": "6B1F9BC2-9037-4B9F-8FE8-B85AE6FC0FA1",
-                    "kind": "blog",
-                    "title": "Trip Recap",
-                    "body": "A trip note.",
-                    "blogTag": "Trip",
-                    "happenedAt": isoDate,
-                    "createdAt": isoDate,
-                    "updatedAt": isoDate
-                ]
-            ],
-            "updatedAt": isoDate
-        ]
-
-        try writeJSON(descriptor, to: repositoryRoot.appendingPathComponent("descriptor.json"))
-        try writeJSON(snapshot, to: repositoryRoot.appendingPathComponent("repository.json"))
-    }
-
-    private func seedPortraitBlogRepository(at storageRoot: URL) throws {
-        let fileManager = FileManager.default
-        let repositoryRoot = storageRoot
-            .appendingPathComponent("repositories", isDirectory: true)
-            .appendingPathComponent("local", isDirectory: true)
-        let imagesRoot = repositoryRoot.appendingPathComponent("images", isDirectory: true)
-        let isoDate = "2026-04-16T09:00:00Z"
-        let imageName = "interstellar-cover.png"
-        let imageData = makePortraitSeedImageData()
-
-        try fileManager.createDirectory(at: repositoryRoot, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: imagesRoot, withIntermediateDirectories: true)
-        try imageData.write(to: imagesRoot.appendingPathComponent(imageName), options: .atomic)
-
-        let descriptor: [String: Any] = [
-            "role": "local"
-        ]
-        let snapshot: [String: Any] = [
-            "blogTags": ["Watching", "note"],
-            "entries": [
-                [
-                    "id": "7BFC7E5E-EBB3-46D0-B2D0-A9CE4B63B8B2",
-                    "kind": "blog",
-                    "title": "Interstellar (2014)",
-                    "body": "A profound exploration of love and gravity, Nolan folds intimacy into cosmic scale.",
-                    "blogTag": "Watching",
-                    "blogImageLayout": "portrait",
-                    "imageReference": imageName,
-                    "happenedAt": isoDate,
-                    "createdAt": isoDate,
-                    "updatedAt": isoDate
-                ]
-            ],
-            "updatedAt": isoDate
-        ]
-
-        try writeJSON(descriptor, to: repositoryRoot.appendingPathComponent("descriptor.json"))
-        try writeJSON(snapshot, to: repositoryRoot.appendingPathComponent("repository.json"))
-    }
-
-    private func writeJSON(_ value: Any, to url: URL) throws {
-        let fileManager = FileManager.default
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: url, options: .atomic)
-    }
-
-    private func makePortraitSeedImageData() -> Data {
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 240, height: 420))
-        let image = renderer.image { context in
-            UIColor(red: 0.08, green: 0.12, blue: 0.23, alpha: 1).setFill()
-            context.fill(CGRect(x: 0, y: 0, width: 240, height: 420))
-
-            UIColor(red: 0.71, green: 0.82, blue: 0.96, alpha: 1).setFill()
-            context.fill(CGRect(x: 24, y: 28, width: 192, height: 192))
-
-            UIColor.white.withAlphaComponent(0.8).setFill()
-            context.fill(CGRect(x: 34, y: 250, width: 172, height: 20))
-            context.fill(CGRect(x: 34, y: 286, width: 140, height: 16))
-            context.fill(CGRect(x: 34, y: 316, width: 120, height: 16))
-        }
-
-        return image.pngData() ?? Data()
-    }
-
     private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 6) {
+        dismissBlockingAlertIfPresent(in: app)
         var attempts = 0
         while (!element.exists || !element.isHittable) && attempts < maxSwipes {
             app.swipeUp()
+            dismissBlockingAlertIfPresent(in: app)
             attempts += 1
         }
+    }
+
+    private func dismissBlockingAlertIfPresent(in app: XCUIApplication) {
+        if app.alerts.firstMatch.exists {
+            _ = dismissAlert(app.alerts.firstMatch)
+        }
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if springboard.alerts.firstMatch.exists {
+            _ = dismissAlert(springboard.alerts.firstMatch)
+        }
+    }
+
+    private func dismissAlert(_ alert: XCUIElement) -> Bool {
+        let preferredButtons = [
+            "OK",
+            "Allow",
+            "Don’t Allow",
+            "Don't Allow",
+            "Not Now",
+            "Continue",
+            "Close",
+            "Later"
+        ]
+
+        for title in preferredButtons {
+            let button = alert.buttons[title]
+            if button.exists {
+                button.tap()
+                return true
+            }
+        }
+
+        if alert.buttons.firstMatch.exists {
+            alert.buttons.firstMatch.tap()
+            return true
+        }
+
+        return false
     }
 
     private func waitUntil(timeout: TimeInterval, condition: () -> Bool) -> Bool {
@@ -619,4 +478,10 @@ final class thatDayUITests: XCTestCase {
 
         return condition()
     }
+}
+
+private enum UITestSeedScenario: String {
+    case taggedBlog = "tagged-blog"
+    case portraitBlog = "portrait-blog"
+    case readOnlyRepository = "read-only-repository"
 }

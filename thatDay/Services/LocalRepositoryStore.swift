@@ -1,6 +1,6 @@
 import Foundation
 
-struct LocalRepositoryStore {
+nonisolated struct LocalRepositoryStore {
     let rootURL: URL
     let archiveURL: URL
     let descriptorURL: URL
@@ -14,12 +14,16 @@ struct LocalRepositoryStore {
     }
 
     static func live(processInfo: ProcessInfo = .processInfo) -> LocalRepositoryStore {
+        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
         let rootURL: URL
         if let override = processInfo.environment["THATDAY_STORAGE_ROOT"]?.trimmed.nilIfEmpty {
-            rootURL = URL(fileURLWithPath: override, isDirectory: true)
+            if override.hasPrefix("/") {
+                rootURL = URL(fileURLWithPath: override, isDirectory: true)
+            } else {
+                rootURL = baseURL.appendingPathComponent(override, isDirectory: true)
+            }
         } else {
-            let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.temporaryDirectory
             rootURL = baseURL.appendingPathComponent("thatDay", isDirectory: true)
         }
 

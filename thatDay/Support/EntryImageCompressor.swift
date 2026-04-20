@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-enum EntryImageCompressionError: LocalizedError {
+nonisolated enum EntryImageCompressionError: LocalizedError {
     case invalidImageData
     case unableToSatisfySizeLimit
 
@@ -15,7 +15,7 @@ enum EntryImageCompressionError: LocalizedError {
     }
 }
 
-enum EntryImageCompressor {
+nonisolated enum EntryImageCompressor {
     static let maximumByteCount = 100 * 1024
     static let sizeLimitDescription = "100KB"
 

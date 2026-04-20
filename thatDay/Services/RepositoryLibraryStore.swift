@@ -1,6 +1,6 @@
 import Foundation
 
-struct RepositoryLibraryStore {
+nonisolated struct RepositoryLibraryStore {
     private enum Constant {
         static let catalogFilename = "repositories.json"
         static let preferencesFilename = "preferences.json"
@@ -20,12 +20,16 @@ struct RepositoryLibraryStore {
     }
 
     static func live(processInfo: ProcessInfo = .processInfo) -> RepositoryLibraryStore {
+        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
         let rootURL: URL
         if let override = processInfo.environment["THATDAY_STORAGE_ROOT"]?.trimmed.nilIfEmpty {
-            rootURL = URL(fileURLWithPath: override, isDirectory: true)
+            if override.hasPrefix("/") {
+                rootURL = URL(fileURLWithPath: override, isDirectory: true)
+            } else {
+                rootURL = baseURL.appendingPathComponent(override, isDirectory: true)
+            }
         } else {
-            let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.temporaryDirectory
             rootURL = baseURL.appendingPathComponent("thatDay", isDirectory: true)
         }
 

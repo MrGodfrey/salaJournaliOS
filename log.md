@@ -491,3 +491,65 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testPortraitBlogDetailCapsCoverHeightWithoutCroppingWidth`
     - 定向 UI 测试 `1/1` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.17_23-14-25-+0800.xcresult`
+
+## 2026-04-20 20:05
+
+- 修复 Xcode / Swift 6 测试编译里的 actor 隔离错误：
+  - 在 app target 默认 `MainActor` 隔离开启的前提下，把纯数据模型、本地仓库存储、归档服务显式标记为 `nonisolated`
+  - 让 `String` / `Calendar` / `URL` / `Data` 等纯辅助成员可以从非主 actor 的测试与文件 IO 代码里直接调用
+  - 保留依赖 `AppLanguage` 日期 formatter 的 `EntryRecord` 日期文案属性在 `@MainActor`，避免把 UI 格式化逻辑扩散到跨线程共享
+  - 为 `testJournalCardDateIncludesWeekdayBeforeYear` 补上 `@MainActor`，与其被测属性的隔离边界保持一致
+- `README.md` 无需更新：本次未改动用户可见行为、设置项、测试入口或运行方式
+- 验证记录：
+  - `xcodebuild build-for-testing -project thatDay.xcodeproj -scheme thatDay -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -only-testing:thatDayTests`
+    - `TEST BUILD SUCCEEDED`
+  - 尝试直接执行 `xcodebuild test` 时，Xcode 在本机设备探测阶段持续输出 `mobile.notification_proxy` / `The device is passcode protected` 环境日志，因此本次以 `build-for-testing` 确认编译修复
+
+## 2026-04-20 20:08
+
+- 修复归档 round-trip 单测的 `/tmp` 写权限问题：
+  - `testRepositoryArchiveRoundTripRestoresImagesForTmpSymlinkPaths` 原先直接写入 `/tmp/thatDay-archive-...`
+  - 在 Xcode 测试宿主里，这个绝对路径会被沙箱拒绝，导致用例在夹具准备阶段失败，而不是业务逻辑失败
+  - 现改为在测试可写临时目录内创建一个名为 `tmp` 的符号链接目录，并继续通过该符号链接路径完成 source / destination 仓库 round-trip
+  - 保留了用例原本要验证的“symlink 路径下导出导入后图片仍可恢复”语义
+- `README.md` 无需更新：本次仅修正测试夹具，不涉及用户可见行为、设置项、测试入口或运行方式
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testRepositoryArchiveRoundTripRestoresImagesForTmpSymlinkPaths`
+    - 定向单元测试 `1/1` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_20-07-32-+0800.xcresult`
+
+## 2026-04-20 20:13
+
+- 修复真机 UI 测试启动时被通知权限 / 系统中断打断的问题：
+  - UI 测试启动统一追加 `THATDAY_UI_TEST_MODE=1`
+  - app 在该模式下跳过 `registerForRemoteNotifications()`
+  - app 在该模式下将应用角标更新注入为 no-op，避免启动阶段触发通知相关系统交互
+  - 这样 UI 测试不再依赖人工处理系统权限弹窗，真机和模拟器启动行为保持稳定
+- `README.md` 无需更新：本次未改变用户可见行为，也未改变手工运行测试的入口或步骤
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testCalendarTagStatisticOpensBlogWithMatchingFilter`
+    - 定向 UI 测试 `1/1` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_20-12-07-+0800.xcresult`
+
+## 2026-04-20 20:18
+
+- 修复真机 seeded UI 测试的数据沙箱问题：
+  - 原先 UI tests 先在测试进程里写临时仓库，再把绝对路径通过 `THATDAY_STORAGE_ROOT` 传给 app
+  - 这在模拟器上可用，但真机上测试 runner 和 app 属于不同沙箱，app 读取该路径会触发 permission 错误，并弹出 `Notice` alert 打断测试
+  - 现改为由 app 读取 `THATDAY_UI_TEST_SEED` 后，在自己的沙箱内直接写入测试仓库数据
+  - `THATDAY_STORAGE_ROOT` 也改为支持相对路径，UI tests 现在传的是 app 沙箱内的唯一目录名，而不是测试进程的绝对临时路径
+  - 同时补了 UI test 弹窗兜底处理器，避免后续出现阻塞性 alert 时整条链路直接中断
+- `README.md` 无需更新：本次没有改用户可见功能，也没有改变手工运行测试的命令入口
+- 验证记录：
+  - `xcodebuild build-for-testing -project thatDay.xcodeproj -scheme thatDay -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -only-testing:thatDayUITests`
+    - `TEST BUILD SUCCEEDED`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testCalendarTagStatisticOpensBlogWithMatchingFilter`
+    - 定向 UI 测试 `1/1` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_20-17-35-+0800.xcresult`
+
+## 2026-04-20 20:20
+
+- 修复单元测试里的未使用返回值问题：
+  - `thatDayTests.testRepositoryArchiveRoundTripRestoresSnapshot` 调用 `storeImage(data:suggestedID:)` 时，本意只是写入测试图片文件
+  - 现改为显式使用 `_ =` 忽略返回的图片引用，消除 Swift 编译器对未使用结果的报错
+- `README.md` 无需更新：本次仅修正测试代码，不涉及用户可见行为、设置项、测试入口或运行方式

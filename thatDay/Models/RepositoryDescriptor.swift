@@ -1,7 +1,7 @@
 import CloudKit
 import Foundation
 
-enum RepositoryRole: String, Codable, Sendable {
+nonisolated enum RepositoryRole: String, Codable, Sendable {
     case local
     case owner
     case editor
@@ -30,7 +30,7 @@ enum RepositoryRole: String, Codable, Sendable {
     }
 }
 
-enum ShareAccessOption: String, CaseIterable, Codable, Identifiable, Sendable {
+nonisolated enum ShareAccessOption: String, CaseIterable, Codable, Identifiable, Sendable {
     case viewOnly
     case editable
 
@@ -55,7 +55,7 @@ enum ShareAccessOption: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
-struct RepositoryDescriptor: Codable, Hashable, Sendable {
+nonisolated struct RepositoryDescriptor: Codable, Hashable, Sendable {
     var zoneName: String?
     var zoneOwnerName: String?
     var shareRecordName: String?
