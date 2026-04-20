@@ -553,3 +553,35 @@
   - `thatDayTests.testRepositoryArchiveRoundTripRestoresSnapshot` 调用 `storeImage(data:suggestedID:)` 时，本意只是写入测试图片文件
   - 现改为显式使用 `_ =` 忽略返回的图片引用，消除 Swift 编译器对未使用结果的报错
 - `README.md` 无需更新：本次仅修正测试代码，不涉及用户可见行为、设置项、测试入口或运行方式
+
+## 2026-04-20 20:34
+
+- 将当前 worktree 中的 Journal 保存竞态修复同步到原仓库新分支：
+  - `AppStore` 为共享仓库保存流程补上本地变更代次、进行中状态和延后刷新补偿，避免保存未完成时被较旧的前台 / 推送刷新结果覆盖
+  - 新建页与详情编辑页的 `Save` 按钮在点击瞬间切到 `Saving...`，缩小重复点击导致重复提交的窗口
+- 同步回归测试与文档：
+  - 单元测试新增 `testRefreshingSharedRepositoryDuringSaveKeepsNewJournalEntryVisibleAndPersisted`
+  - `README.md` 补充共享仓库保存期间的刷新保护说明
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testRefreshingSharedRepositoryDuringSaveKeepsNewJournalEntryVisibleAndPersisted -only-testing:thatDayTests/thatDayTests/testSavingJournalEntryAllowsEmptyTitle -only-testing:thatDayTests/thatDayTests/testManualRefreshUpdatesSharedRepositoryAndMaterializesImages`
+    - 待执行
+
+## 2026-04-20 20:32
+
+- 补记原仓库新分支上的验证结果：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testRefreshingSharedRepositoryDuringSaveKeepsNewJournalEntryVisibleAndPersisted -only-testing:thatDayTests/thatDayTests/testSavingJournalEntryAllowsEmptyTitle -only-testing:thatDayTests/thatDayTests/testManualRefreshUpdatesSharedRepositoryAndMaterializesImages`
+    - 定向测试 `3/3` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_20-31-50-+0800.xcresult`
+  - 运行期间仍有 Xcode 连接已接真机时常见的 `mobile.notification_proxy` / `The device is passcode protected` 噪声日志，但不影响 simulator 上的测试结果
+
+## 2026-04-20 20:42
+
+- 清理仓库中的 `.DS_Store` 追踪：
+  - 根目录、`thatDay/` 和 `thatDay/Assets.xcassets/` 下已被 git 跟踪的 `.DS_Store` 已从索引移除，保留本地 Finder 元数据文件
+  - 根级 `.gitignore` 增加 `.DS_Store`，避免后续再次把这类系统文件提交进仓库
+- `README.md` 无需更新：本次仅调整版本控制忽略规则，不涉及用户可见行为、设置项、测试入口或运行方式
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/thatDayTests/testRefreshingSharedRepositoryDuringSaveKeepsNewJournalEntryVisibleAndPersisted -only-testing:thatDayTests/thatDayTests/testSavingJournalEntryAllowsEmptyTitle -only-testing:thatDayTests/thatDayTests/testManualRefreshUpdatesSharedRepositoryAndMaterializesImages`
+    - 定向测试 `3/3` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.20_20-41-52-+0800.xcresult`
+  - 运行期间仍有 Xcode 连接已接真机时常见的 `mobile.notification_proxy` / `The device is passcode protected` 噪声日志，但不影响 simulator 上的测试结果

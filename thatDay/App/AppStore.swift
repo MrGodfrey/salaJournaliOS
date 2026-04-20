@@ -97,6 +97,9 @@ final class AppStore {
     private var isApplicationActive = false
     private var preferences = AppPreferences()
     private var shouldRequireAuthenticationOnNextActive = false
+    private var repositoryMutationGenerations: [String: Int] = [:]
+    private var repositoryMutationInFlightCounts: [String: Int] = [:]
+    private var repositoriesPendingRefreshAfterMutation: Set<String> = []
 
     var selectedTab: AppTab = .journal
     var selectedDate: Date
@@ -1076,6 +1079,35 @@ final class AppStore {
         await persistCurrentRepositoryMutation(previousEntries: previousEntries, previousBlogTags: previousBlogTags)
     }
 
+    private func beginRepositoryMutation(for repositoryID: String) {
+        repositoryMutationGenerations[repositoryID, default: 0] += 1
+        repositoryMutationInFlightCounts[repositoryID, default: 0] += 1
+    }
+
+    private func finishRepositoryMutation(for repositoryID: String) -> RepositoryReference? {
+        let remainingMutations = max(0, (repositoryMutationInFlightCounts[repositoryID] ?? 0) - 1)
+        if remainingMutations == 0 {
+            repositoryMutationInFlightCounts.removeValue(forKey: repositoryID)
+        } else {
+            repositoryMutationInFlightCounts[repositoryID] = remainingMutations
+        }
+
+        guard remainingMutations == 0,
+              repositoriesPendingRefreshAfterMutation.remove(repositoryID) != nil else {
+            return nil
+        }
+
+        return repositoryReference(for: repositoryID)
+    }
+
+    private func repositoryMutationGeneration(for repositoryID: String) -> Int {
+        repositoryMutationGenerations[repositoryID] ?? 0
+    }
+
+    private func isRepositoryMutationInFlight(_ repositoryID: String) -> Bool {
+        (repositoryMutationInFlightCounts[repositoryID] ?? 0) > 0
+    }
+
     private func applyAcceptedShare(_ accepted: AcceptedSharedRepository) throws {
         let repositoryID = accepted.descriptor.storageIdentifier
         let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
@@ -1148,37 +1180,64 @@ final class AppStore {
     }
 
     private func persistEntries() async throws {
-        normalizeRepositoryState()
-        let snapshot = RepositorySnapshot(
-            entries: entries,
-            updatedAt: now(),
-            blogTags: blogTags
-        )
-        try currentRepositoryStore.saveSnapshot(snapshot)
+        let repositoryID = currentRepositoryID
+        let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
+        let repositoryName = currentRepositoryName
+        let descriptorAtStart = repositoryDescriptor
 
-        if repositoryDescriptor.role != .local {
-            let cloudSnapshot = try currentRepositoryStore.makeSnapshot(
+        beginRepositoryMutation(for: repositoryID)
+
+        var storedError: Error?
+
+        do {
+            normalizeRepositoryState()
+            let snapshot = RepositorySnapshot(
                 entries: entries,
-                updatedAt: snapshot.updatedAt,
-                embeddingImages: true,
+                updatedAt: now(),
                 blogTags: blogTags
             )
-            repositoryDescriptor = try await cloudService.saveSnapshot(cloudSnapshot, using: repositoryDescriptor)
-            try currentRepositoryStore.saveDescriptor(repositoryDescriptor)
-        } else {
-            try currentRepositoryStore.saveDescriptor(.local)
-            repositoryDescriptor = .local
+            try repositoryStore.saveSnapshot(snapshot)
+
+            let savedDescriptor: RepositoryDescriptor
+            if descriptorAtStart.role != .local {
+                let cloudSnapshot = try repositoryStore.makeSnapshot(
+                    entries: entries,
+                    updatedAt: snapshot.updatedAt,
+                    embeddingImages: true,
+                    blogTags: blogTags
+                )
+                savedDescriptor = try await cloudService.saveSnapshot(cloudSnapshot, using: descriptorAtStart)
+                try repositoryStore.saveDescriptor(savedDescriptor)
+            } else {
+                savedDescriptor = .local
+                try repositoryStore.saveDescriptor(savedDescriptor)
+            }
+
+            if currentRepositoryID == repositoryID {
+                repositoryDescriptor = savedDescriptor
+            }
+
+            upsertRepositoryReference(
+                repositoryID: repositoryID,
+                descriptor: savedDescriptor,
+                displayName: repositoryName,
+                snapshotUpdatedAt: snapshot.updatedAt,
+                markAsOpened: true
+            )
+            try persistRepositoryCatalog()
+            await ensureRepositorySubscriptions()
+        } catch {
+            storedError = error
         }
 
-        upsertRepositoryReference(
-            repositoryID: currentRepositoryID,
-            descriptor: repositoryDescriptor,
-            displayName: currentRepositoryName,
-            snapshotUpdatedAt: snapshot.updatedAt,
-            markAsOpened: true
-        )
-        try persistRepositoryCatalog()
-        await ensureRepositorySubscriptions()
+        let deferredRefreshReference = finishRepositoryMutation(for: repositoryID)
+        if let deferredRefreshReference {
+            try? await refreshRepository(deferredRefreshReference, trigger: .foreground)
+        }
+
+        if let storedError {
+            throw storedError
+        }
     }
 
     private func repositoryReference(for repositoryID: String) -> RepositoryReference? {
@@ -1244,10 +1303,33 @@ final class AppStore {
 
     private func refreshRepository(_ reference: RepositoryReference, trigger: SharedRepositoryRefreshTrigger) async throws {
         let repositoryStore = libraryStore.repositoryStore(for: reference.id)
+        let mutationGenerationBeforeLoad = repositoryMutationGeneration(for: reference.id)
         let previousSnapshot = try repositoryStore.loadSnapshot()
         let remoteSnapshot = try await cloudService.loadSnapshot(using: reference.descriptor)
-        let previousUpdatedAt = reference.lastKnownSnapshotUpdatedAt ?? previousSnapshot?.updatedAt
-        let shouldNotify = previousUpdatedAt != nil && remoteSnapshot.updatedAt > (previousUpdatedAt ?? .distantPast)
+        let normalizedRemoteSnapshot = remoteSnapshot.removingEmbeddedImages()
+        let latestLocalSnapshot = try repositoryStore.loadSnapshot()
+
+        if isRepositoryMutationInFlight(reference.id) {
+            repositoriesPendingRefreshAfterMutation.insert(reference.id)
+            return
+        }
+
+        if let latestLocalSnapshot {
+            if latestLocalSnapshot.updatedAt > normalizedRemoteSnapshot.updatedAt {
+                return
+            }
+
+            if repositoryMutationGeneration(for: reference.id) != mutationGenerationBeforeLoad,
+               latestLocalSnapshot.updatedAt >= normalizedRemoteSnapshot.updatedAt,
+               latestLocalSnapshot != normalizedRemoteSnapshot {
+                return
+            }
+        }
+
+        let previousUpdatedAt = [reference.lastKnownSnapshotUpdatedAt, previousSnapshot?.updatedAt]
+            .compactMap { $0 }
+            .max()
+        let shouldNotify = previousUpdatedAt != nil && normalizedRemoteSnapshot.updatedAt > (previousUpdatedAt ?? .distantPast)
 
         try repositoryStore.saveDescriptor(reference.descriptor)
         try repositoryStore.saveCloudSnapshot(remoteSnapshot)
@@ -1256,14 +1338,14 @@ final class AppStore {
             repositoryID: reference.id,
             descriptor: reference.descriptor,
             displayName: reference.displayName,
-            snapshotUpdatedAt: remoteSnapshot.updatedAt,
+            snapshotUpdatedAt: normalizedRemoteSnapshot.updatedAt,
             markAsOpened: reference.id == currentRepositoryID
         )
         try persistRepositoryCatalog()
 
         if reference.id == currentRepositoryID {
             repositoryDescriptor = reference.descriptor
-            applySnapshot(remoteSnapshot)
+            applySnapshot(normalizedRemoteSnapshot)
             invalidateImageViews()
         }
 
@@ -1273,7 +1355,7 @@ final class AppStore {
               let notification = makeSharedRepositoryNotification(
                 for: reference,
                 previousEntries: previousSnapshot?.entries ?? [],
-                latestEntries: remoteSnapshot.entries
+                latestEntries: normalizedRemoteSnapshot.entries
               ) else {
             return
         }

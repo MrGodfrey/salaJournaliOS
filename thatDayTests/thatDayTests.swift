@@ -899,6 +899,107 @@ final class thatDayTests: XCTestCase {
         XCTAssertEqual(cachedSnapshot.entries.first?.title, "Shared Blog Updated")
     }
 
+    @MainActor
+    func testRefreshingSharedRepositoryDuringSaveKeepsNewJournalEntryVisibleAndPersisted() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .editor
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let saveDate = fixtureDate("2026-04-16T10:00:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Earlier Shared Journal",
+                    happenedAt: initialDate
+                )
+            ],
+            updatedAt: initialDate
+        )
+
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(initialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "Shared Repository",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = initialSnapshot
+        cloudService.pauseSaveSnapshot = true
+        cloudService.saveSnapshotStartedExpectation = expectation(description: "cloud save paused")
+
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { saveDate }
+        )
+        await store.loadIfNeeded()
+
+        let saveTask = Task {
+            await store.saveEntry(
+                draft: EntryDraft(
+                    kind: .journal,
+                    title: "Fresh Shared Journal",
+                    body: "Should survive a stale refresh.",
+                    happenedAt: initialDate
+                ),
+                importedImageData: nil
+            )
+        }
+
+        if let saveSnapshotStartedExpectation = cloudService.saveSnapshotStartedExpectation {
+            await fulfillment(of: [saveSnapshotStartedExpectation], timeout: 1.0)
+        }
+
+        await store.refreshSharedRepositories(trigger: .foreground)
+
+        XCTAssertEqual(
+            store.journalEntries.filter { $0.title == "Fresh Shared Journal" }.count,
+            1
+        )
+
+        let snapshotDuringSave = try XCTUnwrap(sharedStore.loadSnapshot())
+        XCTAssertEqual(
+            snapshotDuringSave.entries.filter { $0.title == "Fresh Shared Journal" }.count,
+            1
+        )
+
+        cloudService.resumePausedSaveSnapshot()
+
+        let didSave = await saveTask.value
+        XCTAssertTrue(didSave)
+        XCTAssertEqual(
+            store.journalEntries.map(\.title),
+            ["Fresh Shared Journal", "Earlier Shared Journal"]
+        )
+
+        let persistedSnapshot = try XCTUnwrap(sharedStore.loadSnapshot())
+        XCTAssertEqual(
+            persistedSnapshot.entries.map(\.title).sorted(),
+            ["Earlier Shared Journal", "Fresh Shared Journal"]
+        )
+    }
+
     func testRepositoryArchiveRoundTripRestoresSnapshot() async throws {
         let rootURL = makeTempDirectory()
         let sourceStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("source", isDirectory: true))
@@ -1395,6 +1496,10 @@ private final class MockCloudRepositoryService: CloudRepositoryServicing {
     var loadedSnapshot: RepositorySnapshot?
     var acceptedSharedRepository: AcceptedSharedRepository?
     var savedSnapshots: [RepositorySnapshot] = []
+    var saveSnapshotStartedExpectation: XCTestExpectation?
+    var pauseSaveSnapshot = false
+
+    private var saveSnapshotContinuation: CheckedContinuation<Void, Never>?
 
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot {
         if let loadedSnapshot {
@@ -1407,6 +1512,15 @@ private final class MockCloudRepositoryService: CloudRepositoryServicing {
     func saveSnapshot(_ snapshot: RepositorySnapshot, using descriptor: RepositoryDescriptor) async throws -> RepositoryDescriptor {
         savedSnapshots.append(snapshot)
 
+        if pauseSaveSnapshot {
+            await withCheckedContinuation { continuation in
+                saveSnapshotContinuation = continuation
+                saveSnapshotStartedExpectation?.fulfill()
+            }
+        } else {
+            saveSnapshotStartedExpectation?.fulfill()
+        }
+
         if descriptor.role == .local {
             return RepositoryDescriptor(
                 zoneName: "mock-zone",
@@ -1417,6 +1531,12 @@ private final class MockCloudRepositoryService: CloudRepositoryServicing {
         }
 
         return descriptor
+    }
+
+    func resumePausedSaveSnapshot() {
+        saveSnapshotContinuation?.resume()
+        saveSnapshotContinuation = nil
+        pauseSaveSnapshot = false
     }
 
     func shareURL(using descriptor: RepositoryDescriptor, snapshot: RepositorySnapshot) async throws -> URL {

@@ -1,3 +1,4 @@
 # Xcode user-specific workspace state
 xcuserdata/
 *.xcuserstate
+.DS_Store

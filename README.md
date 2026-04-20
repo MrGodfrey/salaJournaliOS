@@ -296,6 +296,7 @@ Application Support/thatDay/
 - `AppStore` 负责在前台刷新共享仓库、比对快照差异、生成本地通知和应用角标，以及在点击通知后切换到对应仓库和文章
 - 共享所有者仍使用 `CKRecordZoneSubscription`；共享成员改用 `CKDatabaseSubscription` 监听 shared database，避免 shared database 不支持 zone subscription 的 CloudKit 报错
 - Journal / Blog 的手动下拉刷新和应用回到前台时的自动刷新，都复用同一条共享仓库拉取链路
+- 当共享仓库正在本地保存时，较旧的前台 / 推送刷新结果不会再覆盖当前设备刚写入的快照；新建或编辑后的文章会稳定留在列表里，不会先消失再晚点重新出现
 - 角标不再跟“是否读过某篇文章”绑定，只要共享更新发生在应用未打开期间就标 `1`，应用进入前台后立即清零
 
 ### 4.7 图片插入与压缩链路

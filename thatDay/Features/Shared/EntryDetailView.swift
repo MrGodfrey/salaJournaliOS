@@ -60,6 +60,11 @@ struct EntryDetailView: View {
 
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(isSaving ? "Saving..." : "Save") {
+                        guard !isSaving else {
+                            return
+                        }
+
+                        isSaving = true
                         Task {
                             await save()
                         }
@@ -296,12 +301,11 @@ struct EntryDetailView: View {
     }
 
     private func save() async {
+        defer { isSaving = false }
+
         guard let entry = store.entry(matching: entryID) else {
             return
         }
-
-        isSaving = true
-        defer { isSaving = false }
 
         let didSave = await store.saveEntry(
             draft: draft,
