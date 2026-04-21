@@ -10,22 +10,22 @@ nonisolated enum SharedUpdateNotificationScope: String, CaseIterable, Codable, I
     var title: String {
         switch self {
         case .all:
-            "All"
+            L10n.string("All")
         case .journal:
-            "Journal"
+            L10n.string("Journal")
         case .blog:
-            "Blog"
+            L10n.string("Blog")
         }
     }
 
     var summary: String {
         switch self {
         case .all:
-            "Journal and Blog updates"
+            L10n.string("Journal and Blog updates")
         case .journal:
-            "Journal updates"
+            L10n.string("Journal updates")
         case .blog:
-            "Blog updates"
+            L10n.string("Blog updates")
         }
     }
 

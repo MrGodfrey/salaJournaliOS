@@ -10,13 +10,13 @@ nonisolated enum RepositoryRole: String, Codable, Sendable {
     var title: String {
         switch self {
         case .local:
-            "Local Repository"
+            L10n.string("Local Repository")
         case .owner:
-            "Shared Owner"
+            L10n.string("Shared Owner")
         case .editor:
-            "Shared Member (Can Edit)"
+            L10n.string("Shared Member (Can Edit)")
         case .viewer:
-            "Shared Member (Read-Only)"
+            L10n.string("Shared Member (Read-Only)")
         }
     }
 
@@ -57,18 +57,18 @@ nonisolated enum ShareAccessOption: String, CaseIterable, Codable, Identifiable,
     var title: String {
         switch self {
         case .viewOnly:
-            "View Only"
+            L10n.string("View Only")
         case .editable:
-            "Can Edit"
+            L10n.string("Can Edit")
         }
     }
 
     var description: String {
         switch self {
         case .viewOnly:
-            "Invitees can only view this repository."
+            L10n.string("Invitees can only view this repository.")
         case .editable:
-            "Invitees can view and edit this repository."
+            L10n.string("Invitees can view and edit this repository.")
         }
     }
 }
@@ -124,15 +124,15 @@ nonisolated struct RepositoryDescriptor: Codable, Hashable, Sendable {
 
     var defaultDisplayName: String {
         guard isCloudBacked else {
-            return "My Repository"
+            return L10n.string("My Repository")
         }
 
         guard let ownerName = zoneOwnerName?.trimmed.nilIfEmpty,
               ownerName != CKCurrentUserDefaultName,
               ownerName != "_defaultOwner_" else {
-            return "Shared Repository"
+            return L10n.string("Shared Repository")
         }
 
-        return "Shared Repository · \(ownerName)"
+        return L10n.format("Shared Repository · %@", ownerName)
     }
 }

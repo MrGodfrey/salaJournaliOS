@@ -26,7 +26,7 @@ struct EntryFormSections: View {
                     set: { draft.blogTag = $0 }
                 )) {
                     ForEach(blogTags, id: \.self) { tag in
-                        Text(tag).tag(tag)
+                        Text(L10n.blogTag(tag)).tag(tag)
                     }
                 }
                 .accessibilityIdentifier("entryBlogTagPicker")
@@ -68,7 +68,7 @@ struct EntryFormSections: View {
     }
 
     private var titlePlaceholder: String {
-        draft.kind == .journal ? "Title (Optional)" : "Title"
+        draft.kind == .journal ? L10n.string("Title (Optional)") : L10n.string("Title")
     }
 
     private var hasImagePreview: Bool {

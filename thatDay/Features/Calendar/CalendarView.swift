@@ -68,23 +68,23 @@ struct CalendarView: View {
 
                     LazyVGrid(columns: statisticsColumns, spacing: 16) {
                         StatisticCard(
-                            title: "JOURNALED",
+                            title: L10n.string("JOURNALED"),
                             value: String(store.journalEntryCount),
-                            unit: "POSTS",
+                            unit: L10n.string("POSTS"),
                             colors: [Color(red: 0.86, green: 0.32, blue: 0.39), Color(red: 0.61, green: 0.18, blue: 0.35)]
                         )
 
                         StatisticCard(
-                            title: "BLOGS",
+                            title: L10n.string("BLOGS"),
                             value: String(store.blogEntryCount),
-                            unit: "POSTS",
+                            unit: L10n.string("POSTS"),
                             colors: [Color(red: 0.34, green: 0.35, blue: 0.86), Color(red: 0.20, green: 0.21, blue: 0.67)]
                         )
 
                         StatisticCard(
-                            title: "WRITTEN",
+                            title: L10n.string("WRITTEN"),
                             value: store.formattedWrittenWordCount,
-                            unit: "WORDS",
+                            unit: L10n.string("WORDS"),
                             colors: [Color(red: 0.88, green: 0.48, blue: 0.34), Color(red: 0.74, green: 0.34, blue: 0.21)]
                         )
                     }
@@ -355,7 +355,7 @@ private struct BlogTagStatisticButton: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(statistic.tag)
+            Text(L10n.blogTag(statistic.tag))
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)

@@ -423,12 +423,23 @@ final class thatDayUITests: XCTestCase {
         XCTAssertFalse(app.buttons["addBlogEntryButton"].waitForExistence(timeout: 2))
     }
 
-    private func launchApp(seed: UITestSeedScenario? = nil) -> XCUIApplication {
+    @MainActor
+    func testSimplifiedChineseLocalizationShowsLocalizedChrome() throws {
+        let app = launchApp(language: .simplifiedChinese)
+
+        XCTAssertTrue(app.staticTexts["这一天还没有日记"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["搜索"].exists)
+        XCTAssertEqual(app.buttons["journalHeaderDateButton"].label, "4月16日")
+    }
+
+    private func launchApp(seed: UITestSeedScenario? = nil, language: UITestLanguage = .english) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["THATDAY_STORAGE_ROOT"] = "thatDay-ui-\(UUID().uuidString)"
         app.launchEnvironment["THATDAY_RESET_STORAGE"] = "1"
         app.launchEnvironment["THATDAY_REFERENCE_DATE"] = "2026-04-16T09:00:00Z"
         app.launchEnvironment["THATDAY_UI_TEST_MODE"] = "1"
+        app.launchEnvironment["THATDAY_APP_LANGUAGE"] = language.appLanguage
+        app.launchArguments += ["-AppleLanguages", "(\(language.appleLanguage))", "-AppleLocale", language.appleLocale]
         if let seed {
             app.launchEnvironment["THATDAY_UI_TEST_SEED"] = seed.rawValue
         }
@@ -468,7 +479,13 @@ final class thatDayUITests: XCTestCase {
             "Not Now",
             "Continue",
             "Close",
-            "Later"
+            "Later",
+            "好",
+            "允许",
+            "不允许",
+            "稍后",
+            "继续",
+            "关闭"
         ]
 
         for title in preferredButtons {
@@ -533,4 +550,36 @@ private enum UITestSeedScenario: String {
     case taggedBlog = "tagged-blog"
     case portraitBlog = "portrait-blog"
     case readOnlyRepository = "read-only-repository"
+}
+
+private enum UITestLanguage {
+    case english
+    case simplifiedChinese
+
+    var appLanguage: String {
+        switch self {
+        case .english:
+            "en"
+        case .simplifiedChinese:
+            "zh-Hans"
+        }
+    }
+
+    var appleLanguage: String {
+        switch self {
+        case .english:
+            "en"
+        case .simplifiedChinese:
+            "zh-Hans"
+        }
+    }
+
+    var appleLocale: String {
+        switch self {
+        case .english:
+            "en_US"
+        case .simplifiedChinese:
+            "zh_Hans_CN"
+        }
+    }
 }

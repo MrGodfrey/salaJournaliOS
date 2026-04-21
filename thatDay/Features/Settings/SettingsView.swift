@@ -30,7 +30,7 @@ struct SettingsView: View {
                         )
                     ) {
                         ForEach(store.sortedRepositories) { repository in
-                            Text(repository.displayName).tag(repository.id)
+                            Text(repository.localizedDisplayName).tag(repository.id)
                         }
                     }
                     .accessibilityIdentifier("currentRepositoryPicker")
@@ -101,7 +101,7 @@ struct SettingsView: View {
                 presenting: pendingPersonalNotificationScopeConfirmation
             ) {
                 scope in
-                Button("Change to \(scope.title)") {
+                Button(L10n.format("Change to %@", scope.title)) {
                     store.setSharedUpdateNotificationScope(scope)
                 }
 
@@ -110,7 +110,12 @@ struct SettingsView: View {
                 }
             } message: {
                 scope in
-                Text("\(scope.summary) will be saved as your personal default. Repositories whose owner selects Journal or Blog will ignore this setting.")
+                Text(
+                    L10n.format(
+                        "%@ will be saved as your personal default. Repositories whose owner selects Journal or Blog will ignore this setting.",
+                        scope.summary
+                    )
+                )
             }
             .alert(
                 "Change repository push updates?",
@@ -125,7 +130,7 @@ struct SettingsView: View {
                 presenting: pendingRepositoryNotificationScopeConfirmation
             ) {
                 scope in
-                Button("Change to \(scope.title)") {
+                Button(L10n.format("Change to %@", scope.title)) {
                     Task {
                         await store.updateRepositorySharedUpdateNotificationScope(scope)
                     }
@@ -139,7 +144,7 @@ struct SettingsView: View {
                 Text(repositoryNotificationScopeChangeMessage(for: scope))
             }
             .alert(
-                pendingBlogTagDeletion?.title ?? "Delete Tag?",
+                pendingBlogTagDeletion?.title ?? L10n.string("Delete Tag?"),
                 isPresented: Binding(
                     get: { pendingBlogTagDeletion != nil },
                     set: { isPresented in
@@ -153,7 +158,7 @@ struct SettingsView: View {
                 request in
                 if request.requiresReassignment {
                     ForEach(request.replacementTags, id: \.self) { replacementTag in
-                        Button("Move posts to \(replacementTag)") {
+                        Button(L10n.format("Move posts to %@", L10n.blogTag(replacementTag))) {
                             confirmBlogTagDeletion(
                                 request.tag,
                                 replacementTag: replacementTag
@@ -378,7 +383,7 @@ struct SettingsView: View {
                 )
             ) {
                 ForEach(store.sortedRepositories) { repository in
-                    Text(repository.displayName).tag(repository.id)
+                    Text(repository.localizedDisplayName).tag(repository.id)
                 }
             }
 
@@ -391,10 +396,13 @@ struct SettingsView: View {
 
     private func repositoryNotificationScopeChangeMessage(for scope: SharedUpdateNotificationScope) -> String {
         if scope == .all {
-            return "Everyone in this repository can use their own personal Push Updates setting again."
+            return L10n.string("Everyone in this repository can use their own personal Push Updates setting again.")
         }
 
-        return "Everyone in this repository will be limited to \(scope.summary.lowercased()). Personal Push Updates settings will be ignored here until you switch back to All."
+        return L10n.format(
+            "Everyone in this repository will be limited to %@. Personal Push Updates settings will be ignored here until you switch back to All.",
+            scope.summary.lowercased(with: AppLanguage.locale)
+        )
     }
 
     private var isAddBlogTagDisabled: Bool {
@@ -406,8 +414,8 @@ struct SettingsView: View {
 
     private var blogTagsDescription: String {
         store.canEditRepository
-            ? "Tags belong to the current repository. Drag a tag to reorder it, add new ones here, and deleting a used tag will first ask where its blog posts should move."
-            : "The current repository is read-only, so blog tags can be viewed here but cannot be changed."
+            ? L10n.string("Tags belong to the current repository. Drag a tag to reorder it, add new ones here, and deleting a used tag will first ask where its blog posts should move.")
+            : L10n.string("The current repository is read-only, so blog tags can be viewed here but cannot be changed.")
     }
 
     private func addBlogTag() {
@@ -425,7 +433,7 @@ struct SettingsView: View {
     @ViewBuilder
     private func blogTagRow(for tag: String) -> some View {
         let row = HStack(spacing: 12) {
-            Text(tag)
+            Text(L10n.blogTag(tag))
 
             Spacer()
 
@@ -484,7 +492,7 @@ private struct BlogTagDeletionRequest: Identifiable {
     }
 
     var title: String {
-        "Delete \(tag)?"
+        L10n.format("Delete %@?", L10n.blogTag(tag))
     }
 
     var requiresReassignment: Bool {
@@ -493,10 +501,10 @@ private struct BlogTagDeletionRequest: Identifiable {
 
     var message: String {
         if requiresReassignment {
-            return "Choose where existing blog posts tagged \(tag) should go before this tag is removed."
+            return L10n.format("Choose where existing blog posts tagged %@ should go before this tag is removed.", L10n.blogTag(tag))
         }
 
-        return "This tag is not used by any blog posts and will be removed from the current repository."
+        return L10n.string("This tag is not used by any blog posts and will be removed from the current repository.")
     }
 }
 

@@ -16,6 +16,8 @@ final class thatDayUITestsLaunchTests: XCTestCase {
         app.launchEnvironment["THATDAY_RESET_STORAGE"] = "1"
         app.launchEnvironment["THATDAY_REFERENCE_DATE"] = "2026-04-16T09:00:00Z"
         app.launchEnvironment["THATDAY_UI_TEST_MODE"] = "1"
+        app.launchEnvironment["THATDAY_APP_LANGUAGE"] = "en"
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
 
         let attachment = XCTAttachment(screenshot: app.screenshot())

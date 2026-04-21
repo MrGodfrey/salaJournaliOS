@@ -147,7 +147,7 @@ struct BlogTagChip: View {
     let tag: String
 
     var body: some View {
-        Text(tag)
+        Text(L10n.blogTag(tag))
             .font(.caption2.weight(.semibold))
             .foregroundStyle(Color.indigo)
             .lineLimit(1)

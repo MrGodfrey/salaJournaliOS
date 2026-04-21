@@ -42,7 +42,11 @@ struct EntryEditorView: View {
                     blogTags: store.blogTags
                 )
             }
-            .navigationTitle(session.mode == .create ? "New \(session.kind.title)" : "Edit \(session.kind.title)")
+            .navigationTitle(
+                session.mode == .create
+                    ? L10n.format("New %@", session.kind.title)
+                    : L10n.format("Edit %@", session.kind.title)
+            )
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -53,7 +57,7 @@ struct EntryEditorView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(isSaving ? "Saving..." : "Save") {
+                    Button(isSaving ? L10n.string("Saving...") : L10n.string("Save")) {
                         guard !isSaving else {
                             return
                         }

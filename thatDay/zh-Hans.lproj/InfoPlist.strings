@@ -1,0 +1,2 @@
+"NSPhotoLibraryUsageDescription" = "需要访问照片库以选择文章图片。";
+"NSFaceIDUsageDescription" = "需要使用 Face ID 来启用生物识别解锁。";

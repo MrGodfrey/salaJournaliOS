@@ -108,7 +108,7 @@ private struct AppLockOverlay: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Button(isAuthenticating ? "Authenticating..." : "Try Again") {
+                Button(isAuthenticating ? L10n.string("Authenticating...") : L10n.string("Try Again")) {
                     unlockAction()
                 }
                 .buttonStyle(.borderedProminent)

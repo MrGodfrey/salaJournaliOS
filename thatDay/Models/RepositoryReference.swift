@@ -44,4 +44,8 @@ nonisolated struct RepositoryReference: Identifiable, Codable, Hashable, Sendabl
     var isLocal: Bool {
         source == .local
     }
+
+    var localizedDisplayName: String {
+        L10n.localizedRepositoryDisplayName(displayName, descriptor: descriptor, source: source)
+    }
 }

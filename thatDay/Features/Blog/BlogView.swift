@@ -38,7 +38,7 @@ struct BlogView: View {
                         .padding(.vertical, 48)
                     } else if filteredEntries.isEmpty {
                         ContentUnavailableView(
-                            "No posts in \(store.selectedBlogTag ?? "this tag")",
+                            L10n.format("No posts in %@", L10n.blogTag(store.selectedBlogTag ?? L10n.string("this tag"))),
                             systemImage: "line.3.horizontal.decrease.circle",
                             description: Text("Choose another tag or add a new blog post.")
                         )
@@ -206,17 +206,19 @@ private struct BlogTagFilterOption: Identifiable, Hashable {
     let tag: String?
     let accessibilityID: String
 
-    nonisolated static let all = BlogTagFilterOption(
-        id: "all",
-        title: "All",
-        tag: nil,
-        accessibilityID: "All"
-    )
+    nonisolated static var all: BlogTagFilterOption {
+        BlogTagFilterOption(
+            id: "all",
+            title: L10n.string("All"),
+            tag: nil,
+            accessibilityID: "All"
+        )
+    }
 
     nonisolated static func tag(_ value: String) -> BlogTagFilterOption {
         BlogTagFilterOption(
             id: value,
-            title: value,
+            title: L10n.blogTag(value),
             tag: value,
             accessibilityID: value
         )

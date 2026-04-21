@@ -34,17 +34,17 @@ enum CloudRepositoryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .repositoryDescriptorMissing:
-            "The current repository is not connected to CloudKit yet."
+            L10n.string("The current repository is not connected to CloudKit yet.")
         case .shareLinkInvalid:
-            "Enter a valid iCloud share link."
+            L10n.string("Enter a valid iCloud share link.")
         case .repositoryNotFound:
-            "No data was found for the current shared repository."
+            L10n.string("No data was found for the current shared repository.")
         case .repositoryLocked:
-            "The current shared repository is read-only and cannot be changed."
+            L10n.string("The current shared repository is read-only and cannot be changed.")
         case .invalidRepositoryData:
-            "The repository data in CloudKit could not be recognized."
+            L10n.string("The repository data in CloudKit could not be recognized.")
         case .shareUnavailable:
-            "A share invite cannot be created right now. Confirm that iCloud and CloudKit are configured."
+            L10n.string("A share invite cannot be created right now. Confirm that iCloud and CloudKit are configured.")
         }
     }
 }
@@ -227,7 +227,7 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         return AcceptedSharedRepository(
             descriptor: descriptor,
             snapshot: snapshot,
-            displayName: ownerDisplayName.map { "\($0)'s Shared Repository" } ?? descriptor.defaultDisplayName
+            displayName: L10n.sharedRepositoryDisplayName(ownerName: ownerDisplayName)
         )
     }
 
@@ -262,7 +262,7 @@ final class CloudRepositoryService: CloudRepositoryServicing {
 
         let share = CKShare(recordZoneID: zoneID)
         share.publicPermission = .none
-        share[CKShare.SystemFieldKey.title] = "thatDay Repository" as CKRecordValue
+        share[CKShare.SystemFieldKey.title] = L10n.string("thatDay Repository") as CKRecordValue
         guard let savedShare = try await saveRecord(share, in: privateDatabase) as? CKShare else {
             throw CloudRepositoryError.shareUnavailable
         }

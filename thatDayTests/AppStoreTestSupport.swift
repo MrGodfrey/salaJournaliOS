@@ -5,6 +5,16 @@ import XCTest
 @testable import thatDay
 
 class AppStoreTestCase: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        setenv("THATDAY_APP_LANGUAGE", "en", 1)
+    }
+
+    override func tearDown() {
+        unsetenv("THATDAY_APP_LANGUAGE")
+        super.tearDown()
+    }
+
     @MainActor
     func makeStore(
         now: Date,

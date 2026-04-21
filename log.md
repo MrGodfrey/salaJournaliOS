@@ -683,3 +683,24 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-journal-2204 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/JournalTests`
     - 定向单元测试 `18/18` 通过
     - `xcresult`: `/tmp/thatDay-journal-2204/Logs/Test/Test-thatDay-2026.04.20_22-03-22-+0800.xcresult`
+
+## 2026-04-21 21:09
+
+- 应用新增简体中文支持：
+  - UI 文案、日期展示、系统权限提示和主要错误 / 提示信息现支持英文与简体中文，并默认跟随系统语言
+  - `Journal / Calendar / Search / Blog / Settings` 的动态标题、统计文案、按钮文案与通知提示统一走本地化输出
+- 本地化基础设施补齐：
+  - 新增 `thatDay/Support/L10n.swift`，统一处理字符串查找、格式化、内置 Blog 标签显示和测试语言覆盖
+  - `thatDay/Support/AppLanguage.swift` 不再固定 `en_US`，日期标题改为按当前语言输出；英文保持 `Thursday, 2026` 风格，简体中文改为 `2026年 星期四`
+  - 新增 `thatDay/zh-Hans.lproj/Localizable.strings` 与 `thatDay/zh-Hans.lproj/InfoPlist.strings`
+- Blog 标签显示规则更新：
+  - 内置标签 `Reading / Watching / Game / Trip / note` 会随界面语言本地化显示
+  - 自定义标签仍保持用户原始写法，不会被翻译或重写
+- 测试与文档同步：
+  - `README.md` 已更新：补充英文 / 简体中文双语支持、日期展示变化与测试语言说明
+  - 单元测试和大多数 UI 测试默认固定英文环境，避免本机系统语言影响断言
+  - UI 测试新增简体中文界面回归用例，覆盖空态文案、tab 标题与日期头部显示
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+    - 完整测试通过；单元测试 `66/66` 通过，UI 测试 `28` 次执行全部通过
+    - `xcresult`: `/tmp/thatDay-full-20260421-2/Logs/Test/Test-thatDay-2026.04.21_21-03-39-+0800.xcresult`

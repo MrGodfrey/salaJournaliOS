@@ -8,9 +8,9 @@ nonisolated enum EntryImageCompressionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidImageData:
-            "The selected image could not be recognized. Choose a different image."
+            L10n.string("The selected image could not be recognized. Choose a different image.")
         case .unableToSatisfySizeLimit:
-            "This image could not be compressed below 100KB. Choose a different image."
+            L10n.string("This image could not be compressed below 100KB. Choose a different image.")
         }
     }
 }

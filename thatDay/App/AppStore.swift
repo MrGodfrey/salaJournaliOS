@@ -37,9 +37,9 @@ enum RepositoryTransferKind: String, Sendable {
     var title: String {
         switch self {
         case .export:
-            "Exporting"
+            L10n.string("Exporting")
         case .import:
-            "Importing"
+            L10n.string("Importing")
         }
     }
 }
@@ -58,7 +58,7 @@ struct RepositoryTransferProgress: Equatable, Sendable {
     }
 
     var statusText: String {
-        "\(kind.title) \(completedFiles) of \(totalFiles) files"
+        L10n.format("%@ %lld of %lld files", kind.title, Int64(completedFiles), Int64(totalFiles))
     }
 }
 
@@ -178,7 +178,7 @@ final class AppStore {
     }
 
     var currentRepositoryName: String {
-        currentRepositoryReference?.displayName ?? repositoryDescriptor.defaultDisplayName
+        currentRepositoryReference?.localizedDisplayName ?? repositoryDescriptor.defaultDisplayName
     }
 
     var defaultRepositoryID: String {
@@ -217,31 +217,43 @@ final class AppStore {
         switch repositoryDescriptor.role {
         case .local:
             if repositorySharedUpdateNotificationScope == .all {
-                return "When this repository is shared, members can use their own Push Updates preference."
+                return L10n.string("When this repository is shared, members can use their own Push Updates preference.")
             }
 
-            return "When this repository is shared, every member will be limited to \(repositorySharedUpdateNotificationScope.summary.lowercased()) for this repository."
+            return L10n.format(
+                "When this repository is shared, every member will be limited to %@ for this repository.",
+                repositorySharedUpdateNotificationScope.summary.lowercased(with: AppLanguage.locale)
+            )
         case .owner:
             if repositorySharedUpdateNotificationScope == .all {
-                return "Members can use their own Push Updates preference while this repository stays on All."
+                return L10n.string("Members can use their own Push Updates preference while this repository stays on All.")
             }
 
-            return "This repository is locked to \(repositorySharedUpdateNotificationScope.summary.lowercased()) for every member. Personal Push Updates preferences are ignored here until you switch back to All."
+            return L10n.format(
+                "This repository is locked to %@ for every member. Personal Push Updates preferences are ignored here until you switch back to All.",
+                repositorySharedUpdateNotificationScope.summary.lowercased(with: AppLanguage.locale)
+            )
         case .editor, .viewer:
             if repositorySharedUpdateNotificationScope == .all {
-                return "The owner allows each member to use their own Push Updates preference for this repository."
+                return L10n.string("The owner allows each member to use their own Push Updates preference for this repository.")
             }
 
-            return "The owner locked this repository to \(repositorySharedUpdateNotificationScope.summary.lowercased()). Your personal Push Updates preference is ignored here until the owner switches back to All."
+            return L10n.format(
+                "The owner locked this repository to %@. Your personal Push Updates preference is ignored here until the owner switches back to All.",
+                repositorySharedUpdateNotificationScope.summary.lowercased(with: AppLanguage.locale)
+            )
         }
     }
 
     var personalNotificationScopeDescription: String {
         if repositorySharedUpdateNotificationScope == .all {
-            return "This is your personal default. It applies to the current repository because the owner allows All."
+            return L10n.string("This is your personal default. It applies to the current repository because the owner allows All.")
         }
 
-        return "This is still your personal default, but the current repository follows the owner's \(repositorySharedUpdateNotificationScope.title) rule instead."
+        return L10n.format(
+            "This is still your personal default, but the current repository follows the owner's %@ rule instead.",
+            repositorySharedUpdateNotificationScope.title
+        )
     }
 
     var selectedDateTitle: String {
@@ -392,7 +404,7 @@ final class AppStore {
 
     func showEditor(for kind: EntryKind, entry: EntryRecord? = nil) {
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot be changed."
+            alertMessage = L10n.string("The current repository is read-only and cannot be changed.")
             return
         }
 
@@ -415,17 +427,17 @@ final class AppStore {
         editing editingEntry: EntryRecord? = nil
     ) async -> Bool {
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot save changes."
+            alertMessage = L10n.string("The current repository is read-only and cannot save changes.")
             return false
         }
 
         let normalized = draft.normalized
         guard normalized.kind == .journal || !normalized.title.isEmpty else {
-            alertMessage = "Enter a title."
+            alertMessage = L10n.string("Enter a title.")
             return false
         }
         guard !normalized.body.isEmpty else {
-            alertMessage = "Enter content."
+            alertMessage = L10n.string("Enter content.")
             return false
         }
 
@@ -497,18 +509,18 @@ final class AppStore {
 
     func addBlogTag(named rawName: String) async {
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot change blog tags."
+            alertMessage = L10n.string("The current repository is read-only and cannot change blog tags.")
             return
         }
 
         let name = rawName.trimmed
         guard !name.isEmpty else {
-            alertMessage = "Enter a tag name."
+            alertMessage = L10n.string("Enter a tag name.")
             return
         }
 
         guard !blogTags.contains(where: { $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) else {
-            alertMessage = "That blog tag already exists."
+            alertMessage = L10n.string("That blog tag already exists.")
             return
         }
 
@@ -524,7 +536,7 @@ final class AppStore {
 
     func moveBlogTags(fromOffsets source: IndexSet, toOffset destination: Int) async {
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot change blog tags."
+            alertMessage = L10n.string("The current repository is read-only and cannot change blog tags.")
             return
         }
 
@@ -535,7 +547,7 @@ final class AppStore {
 
     func moveBlogTag(named sourceTag: String, relativeTo targetTag: String, placingAfter: Bool) async {
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot change blog tags."
+            alertMessage = L10n.string("The current repository is read-only and cannot change blog tags.")
             return
         }
 
@@ -560,7 +572,7 @@ final class AppStore {
 
     func deleteBlogTag(_ tag: String, reassigningEntriesTo replacementTag: String?) async {
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot change blog tags."
+            alertMessage = L10n.string("The current repository is read-only and cannot change blog tags.")
             return
         }
 
@@ -569,7 +581,7 @@ final class AppStore {
         }
 
         guard blogTags.count > 1 else {
-            alertMessage = "At least one blog tag must remain."
+            alertMessage = L10n.string("At least one blog tag must remain.")
             return
         }
 
@@ -578,7 +590,7 @@ final class AppStore {
             guard let replacementTag,
                   replacementTag != tag,
                   blogTags.contains(replacementTag) else {
-                alertMessage = "Choose a destination tag for existing blog posts."
+                alertMessage = L10n.string("Choose a destination tag for existing blog posts.")
                 return
             }
         }
@@ -607,7 +619,7 @@ final class AppStore {
 
     func deleteEntry(_ entry: EntryRecord) async {
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot delete content."
+            alertMessage = L10n.string("The current repository is read-only and cannot delete content.")
             return
         }
 
@@ -624,7 +636,7 @@ final class AppStore {
 
     func clearCurrentRepository() async {
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot be cleared."
+            alertMessage = L10n.string("The current repository is read-only and cannot be cleared.")
             return
         }
 
@@ -700,7 +712,7 @@ final class AppStore {
 
     func presentSharingController() async {
         guard canCreateShareInvite else {
-            alertMessage = "Only the repository owner can create a share invite."
+            alertMessage = L10n.string("Only the repository owner can create a share invite.")
             return
         }
 
@@ -741,7 +753,7 @@ final class AppStore {
         let rawValue = incomingShareLink.trimmed
         guard let url = URL(string: rawValue),
               url.absoluteString.contains("/share/") else {
-            alertMessage = "Enter a valid iCloud share link."
+            alertMessage = L10n.string("Enter a valid iCloud share link.")
             return
         }
 
@@ -819,7 +831,7 @@ final class AppStore {
         }
 
         do {
-            try await authenticateBiometricsAction("Enable biometric lock")
+            try await authenticateBiometricsAction(L10n.string("Enable biometric lock"))
             setBiometricLockEnabled(true)
             isAuthenticationRequired = false
             shouldRequireAuthenticationOnNextActive = false
@@ -853,7 +865,7 @@ final class AppStore {
 
     func updateRepositorySharedUpdateNotificationScope(_ scope: SharedUpdateNotificationScope) async {
         guard canManageRepositoryNotificationScope else {
-            alertMessage = "Only the repository owner can change this repository's push update rule."
+            alertMessage = L10n.string("Only the repository owner can change this repository's push update rule.")
             return
         }
 
@@ -882,7 +894,7 @@ final class AppStore {
         do {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
             guard granted else {
-                alertMessage = "Notification permission is disabled, so shared repository updates cannot be delivered."
+                alertMessage = L10n.string("Notification permission is disabled, so shared repository updates cannot be delivered.")
                 setSharedUpdateNotificationEnabled(false)
                 return
             }
@@ -966,7 +978,7 @@ final class AppStore {
         }
 
         guard canEditRepository else {
-            alertMessage = "The current repository is read-only and cannot import content."
+            alertMessage = L10n.string("The current repository is read-only and cannot import content.")
             return
         }
 
@@ -1080,7 +1092,7 @@ final class AppStore {
         defer { isAuthenticating = false }
 
         do {
-            try await authenticateBiometricsAction("Unlock thatDay")
+            try await authenticateBiometricsAction(L10n.string("Unlock thatDay"))
             isAuthenticationRequired = false
             shouldRequireAuthenticationOnNextActive = false
         } catch {
@@ -1521,11 +1533,11 @@ final class AppStore {
         let title: String
         let body: String
         if changedEntries.count == 1 {
-            title = "\(reference.displayName) updated"
+            title = L10n.format("%@ updated", reference.localizedDisplayName)
             body = previewText
         } else {
-            title = "\(reference.displayName) has \(changedEntries.count) updates"
-            body = "\(previewText) and \(changedEntries.count - 1) more entries"
+            title = L10n.format("%@ has %lld updates", reference.localizedDisplayName, Int64(changedEntries.count))
+            body = L10n.format("%@ and %lld more entries", previewText, Int64(changedEntries.count - 1))
         }
 
         return RepositoryUpdateNotification(
@@ -1577,7 +1589,7 @@ final class AppStore {
             return String(value)
         }
 
-        let abbreviations = ["K", "M", "B", "T"]
+        let abbreviations = [L10n.string("K"), L10n.string("M"), L10n.string("B"), L10n.string("T")]
         let formatter = NumberFormatter()
         formatter.locale = AppLanguage.locale
         formatter.numberStyle = .decimal
@@ -1621,7 +1633,7 @@ final class AppStore {
 
     private static func systemAuthenticateBiometrics(reason: String) async throws {
         let context = LAContext()
-        context.localizedFallbackTitle = "Use Passcode"
+        context.localizedFallbackTitle = L10n.string("Use Passcode")
 
         var evaluationError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &evaluationError) else {
@@ -1654,7 +1666,7 @@ final class AppStore {
             return localizedDescription
         }
 
-        return "An unexpected error occurred."
+        return L10n.string("An unexpected error occurred.")
     }
 
     private static func cloudKitProductionSchemaMessage(for error: Error) -> String? {
@@ -1662,7 +1674,10 @@ final class AppStore {
             return nil
         }
 
-        return "The CloudKit production environment has not deployed the \(recordType) record type yet. Deploy the development schema to production in CloudKit Console, then create the share link again."
+        return L10n.format(
+            "The CloudKit production environment has not deployed the %@ record type yet. Deploy the development schema to production in CloudKit Console, then create the share link again.",
+            recordType
+        )
     }
 
     private static func cloudKitProductionSchemaRecordType(in error: Error) -> String? {

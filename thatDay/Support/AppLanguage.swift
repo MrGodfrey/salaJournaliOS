@@ -1,7 +1,9 @@
 import Foundation
 
 enum AppLanguage {
-    static let locale = Locale(identifier: "en_US")
+    static var locale: Locale {
+        L10n.locale
+    }
 
     static var calendar: Calendar {
         var calendar = Calendar.autoupdatingCurrent
@@ -18,51 +20,62 @@ enum AppLanguage {
     }
 
     static func monthDayTitle(for date: Date) -> String {
-        monthDayFormatter.string(from: date)
+        format(date, template: "MMMMd")
     }
 
     static func monthTitle(for date: Date) -> String {
-        monthFormatter.string(from: date)
+        format(date, template: "MMMM")
     }
 
     static func monthYearTitle(for date: Date) -> String {
-        monthYearFormatter.string(from: date)
+        format(date, template: "yMMMM")
     }
 
     static func weekdayTitle(for date: Date) -> String {
-        weekdayFormatter.string(from: date)
+        format(date, template: "EEEE")
     }
 
     static func timelineTitle(for date: Date) -> String {
-        timelineFormatter.string(from: date)
+        format(date, template: "yMMMMd")
     }
 
     static func cardDateTitle(for date: Date) -> String {
-        cardDateFormatter.string(from: date)
+        if prefersChineseDateFormats {
+            return format(date, pattern: "yyyy年M月d日 EEEE")
+        }
+
+        return format(date, pattern: "EEEE, M/d/yyyy")
     }
 
     static func journalCardDateTitle(for date: Date) -> String {
-        journalCardDateFormatter.string(from: date)
+        if prefersChineseDateFormats {
+            return format(date, pattern: "yyyy年 EEEE")
+        }
+
+        return format(date, pattern: "EEEE, yyyy")
     }
 
     static func yearTitle(for date: Date) -> String {
-        yearFormatter.string(from: date)
+        format(date, template: "y")
     }
 
-    private static let monthDayFormatter = makeFormatter(dateFormat: "MMMM d")
-    private static let monthFormatter = makeFormatter(dateFormat: "MMMM")
-    private static let monthYearFormatter = makeFormatter(dateFormat: "MMMM yyyy")
-    private static let weekdayFormatter = makeFormatter(dateFormat: "EEEE")
-    private static let timelineFormatter = makeFormatter(dateFormat: "MMMM d, yyyy")
-    private static let cardDateFormatter = makeFormatter(dateFormat: "EEEE, M/d/yyyy")
-    private static let journalCardDateFormatter = makeFormatter(dateFormat: "EEEE, yyyy")
-    private static let yearFormatter = makeFormatter(dateFormat: "yyyy")
-
-    private static func makeFormatter(dateFormat: String) -> DateFormatter {
+    private static func format(_ date: Date, template: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.calendar = calendar
-        formatter.dateFormat = dateFormat
-        return formatter
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter.string(from: date)
+    }
+
+    private static func format(_ date: Date, pattern: String) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = calendar
+        formatter.dateFormat = pattern
+        return formatter.string(from: date)
+    }
+
+    private static var prefersChineseDateFormats: Bool {
+        locale.identifier.hasPrefix("zh")
     }
 }

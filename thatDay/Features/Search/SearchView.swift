@@ -37,7 +37,7 @@ struct SearchView: View {
                             }
                         }
                     } header: {
-                        Text("\(store.searchResults.count) Results")
+                        Text(L10n.format("%lld Results", Int64(store.searchResults.count)))
                     }
                 } else {
                     Section {
@@ -56,7 +56,7 @@ struct SearchView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 SearchBar(
                     text: $store.searchText,
-                    placeholder: "Search titles or content"
+                    placeholder: L10n.string("Search titles or content")
                 )
                 .padding(.horizontal, 16)
                 .padding(.top, 8)

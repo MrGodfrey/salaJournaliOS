@@ -9,9 +9,9 @@ nonisolated enum EntryKind: String, CaseIterable, Codable, Identifiable, Sendabl
     var title: String {
         switch self {
         case .journal:
-            "Journal"
+            L10n.string("Journal")
         case .blog:
-            "Blog"
+            L10n.string("Blog")
         }
     }
 
@@ -34,9 +34,9 @@ nonisolated enum BlogCardImageLayout: String, CaseIterable, Codable, Identifiabl
     var title: String {
         switch self {
         case .landscape:
-            "Landscape"
+            L10n.string("Landscape")
         case .portrait:
-            "Portrait"
+            L10n.string("Portrait")
         }
     }
 }

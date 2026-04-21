@@ -59,7 +59,7 @@ struct EntryDetailView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(isSaving ? "Saving..." : "Save") {
+                    Button(isSaving ? L10n.string("Saving...") : L10n.string("Save")) {
                         guard !isSaving else {
                             return
                         }

@@ -8,11 +8,11 @@ nonisolated enum RepositoryArchiveError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidArchive:
-            "The imported ZIP is not a valid repository exported by thatDay."
+            L10n.string("The imported ZIP is not a valid repository exported by thatDay.")
         case .importPermissionDenied:
-            "The selected ZIP file could not be read. Choose it again and retry."
+            L10n.string("The selected ZIP file could not be read. Choose it again and retry.")
         case .invalidRepositoryPath:
-            "A file path in the repository is invalid, so import or export cannot continue."
+            L10n.string("A file path in the repository is invalid, so import or export cannot continue.")
         }
     }
 }
