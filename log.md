@@ -704,3 +704,10 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
     - 完整测试通过；单元测试 `66/66` 通过，UI 测试 `28` 次执行全部通过
     - `xcresult`: `/tmp/thatDay-full-20260421-2/Logs/Test/Test-thatDay-2026.04.21_21-03-39-+0800.xcresult`
+
+## 2026-04-21 22:21
+
+- 新增根目录 `LICENSE`，采用自定义 `thatDay Attribution for Commercial Use License 1.0`
+- 许可范围按当前项目诉求定义为：允许自由使用、修改、分发和商业使用，但商业使用必须注明原项目 `thatDay` 与仓库地址
+- `README.md` 已追加许可说明，并明确这是自定义协议，GitHub 可能不会按标准 SPDX/OSI 许可证自动识别
+- 本次未运行测试：仅新增许可证与文档说明，未改动应用代码、配置或测试入口

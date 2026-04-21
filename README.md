@@ -423,3 +423,10 @@ UI 测试覆盖：
 - 现在的图片压缩策略为了稳定卡住 `100KB` 上限，统一输出 JPEG；如果未来必须保留透明背景，需要单独设计 PNG / HEIC 规则
 - CloudKit 共享相关功能在真机和真实 iCloud 环境下才算完整能力，模拟器和本地测试主要验证的是代码路径和 UI
 - Settings 里的“导入 ZIP 到当前仓库”当前仍是覆盖导入，不做差异合并；如果以后要支持 merge，需要先重新定义冲突规则
+
+## 8. 许可协议
+
+- 根目录新增 `LICENSE`，当前仓库使用自定义 `thatDay Attribution for Commercial Use License 1.0`
+- 该许可允许个人、学习、研究、修改、分发和商业使用
+- 商业使用时，必须在产品说明、About 页、Credits 页或其他对最终用户可见的合理位置注明原项目 `thatDay` 与仓库地址：`https://github.com/MrGodfrey/salaJournaliOS`
+- 该许可是按当前项目诉求编写的自定义协议，不属于 GitHub 常见的 SPDX/OSI 标准许可证；仓库页面可能不会像 `MIT`、`Apache-2.0` 这类标准协议那样自动识别
