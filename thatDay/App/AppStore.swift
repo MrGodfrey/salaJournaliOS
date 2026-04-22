@@ -81,9 +81,16 @@ enum SharedRepositoryRefreshTrigger: Sendable {
     case manual
 }
 
+private enum RepositoryLoadBehavior: Equatable, Sendable {
+    case localCacheOnly
+    case blockingCloudFetchIfNoLocalSnapshot
+}
+
 @MainActor
 @Observable
 final class AppStore {
+    private static let foregroundSharedRefreshMinimumInterval: TimeInterval = 30 * 60
+
     private let libraryStore: RepositoryLibraryStore
     private let cloudService: any CloudRepositoryServicing
     private let repositoryArchiveService = RepositoryArchiveService()
@@ -97,6 +104,9 @@ final class AppStore {
     private var isApplicationActive = false
     private var preferences = AppPreferences()
     private var shouldRequireAuthenticationOnNextActive = false
+    private var shouldEnsureSubscriptionsAfterUnlock = false
+    private var pendingPostUnlockSharedRefreshTrigger: SharedRepositoryRefreshTrigger?
+    private var lastSharedRepositoryRefreshAt: Date?
     private var repositoryMutationGenerations: [String: Int] = [:]
     private var repositoryMutationInFlightCounts: [String: Int] = [:]
     private var repositoriesPendingRefreshAfterMutation: Set<String> = []
@@ -369,8 +379,6 @@ final class AppStore {
 
         didLoad = true
         clearApplicationBadge()
-        isBusy = true
-        defer { isBusy = false }
 
         do {
             repositories = try libraryStore.loadCatalog()
@@ -379,13 +387,16 @@ final class AppStore {
             let launchRepositoryID = repositories.contains(where: { $0.id == preferences.defaultRepositoryID })
                 ? preferences.defaultRepositoryID
                 : RepositoryReference.localRepositoryID
-            try await loadRepository(repositoryID: launchRepositoryID)
-            await ensureRepositorySubscriptions()
-            await refreshSharedRepositories(trigger: .launch)
+            try await loadRepository(repositoryID: launchRepositoryID, behavior: .localCacheOnly)
             if preferences.isBiometricLockEnabled {
                 isAuthenticationRequired = true
                 shouldRequireAuthenticationOnNextActive = false
+                shouldEnsureSubscriptionsAfterUnlock = true
+                pendingPostUnlockSharedRefreshTrigger = .launch
                 await unlockIfNeeded()
+            } else {
+                await ensureRepositorySubscriptions()
+                await refreshSharedRepositories(trigger: .launch)
             }
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
@@ -764,7 +775,10 @@ final class AppStore {
             let accepted = try await cloudService.acceptShare(from: url)
             try applyAcceptedShare(accepted)
             incomingShareLink = ""
-            try await loadRepository(repositoryID: accepted.descriptor.storageIdentifier)
+            try await loadRepository(
+                repositoryID: accepted.descriptor.storageIdentifier,
+                behavior: .localCacheOnly
+            )
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
         }
@@ -777,7 +791,10 @@ final class AppStore {
         do {
             let accepted = try await cloudService.acceptShare(metadata: metadata)
             try applyAcceptedShare(accepted)
-            try await loadRepository(repositoryID: accepted.descriptor.storageIdentifier)
+            try await loadRepository(
+                repositoryID: accepted.descriptor.storageIdentifier,
+                behavior: .localCacheOnly
+            )
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
         }
@@ -788,11 +805,24 @@ final class AppStore {
             return
         }
 
-        isBusy = true
-        defer { isBusy = false }
+        let shouldBlockOnRemoteLoad = shouldBlockWhenSwitchingRepository(to: repositoryID)
+        if shouldBlockOnRemoteLoad {
+            isBusy = true
+        }
+        defer {
+            if shouldBlockOnRemoteLoad {
+                isBusy = false
+            }
+        }
 
         do {
-            try await loadRepository(repositoryID: repositoryID)
+            try await loadRepository(
+                repositoryID: repositoryID,
+                behavior: .blockingCloudFetchIfNoLocalSnapshot
+            )
+            if !shouldBlockOnRemoteLoad {
+                await silentlyRefreshCurrentRepository(trigger: .foreground)
+            }
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
         }
@@ -914,11 +944,13 @@ final class AppStore {
             return
         }
 
+        lastSharedRepositoryRefreshAt = now()
+
         for reference in sharedReferences {
             do {
                 try await refreshRepository(reference, trigger: trigger)
             } catch {
-                if reference.id == currentRepositoryID {
+                if trigger == .manual, reference.id == currentRepositoryID {
                     alertMessage = Self.userFacingMessage(for: error)
                 }
             }
@@ -1055,14 +1087,14 @@ final class AppStore {
             return
         }
 
-        guard preferences.isBiometricLockEnabled else {
-            isAuthenticationRequired = false
-            shouldRequireAuthenticationOnNextActive = false
-            return
-        }
-
         switch phase {
         case .background:
+            guard preferences.isBiometricLockEnabled else {
+                isAuthenticationRequired = false
+                shouldRequireAuthenticationOnNextActive = false
+                return
+            }
+
             guard !isAuthenticating else {
                 return
             }
@@ -1070,12 +1102,29 @@ final class AppStore {
             shouldRequireAuthenticationOnNextActive = true
             isAuthenticationRequired = true
         case .active:
-            guard shouldRequireAuthenticationOnNextActive else {
+            if preferences.isBiometricLockEnabled {
+                if shouldRequireAuthenticationOnNextActive,
+                   shouldRefreshSharedRepositoriesOnForeground() {
+                    pendingPostUnlockSharedRefreshTrigger = .foreground
+                }
+
+                if shouldRequireAuthenticationOnNextActive {
+                    isAuthenticationRequired = true
+                    await unlockIfNeeded()
+                    guard !isAuthenticationRequired else {
+                        return
+                    }
+                }
+            } else {
+                isAuthenticationRequired = false
+                shouldRequireAuthenticationOnNextActive = false
+            }
+
+            if preferences.isBiometricLockEnabled, isAuthenticationRequired {
                 return
             }
 
-            isAuthenticationRequired = true
-            await unlockIfNeeded()
+            await refreshSharedRepositoriesIfNeededOnForeground()
         default:
             return
         }
@@ -1095,6 +1144,7 @@ final class AppStore {
             try await authenticateBiometricsAction(L10n.string("Unlock thatDay"))
             isAuthenticationRequired = false
             shouldRequireAuthenticationOnNextActive = false
+            await runDeferredPostUnlockWorkIfNeeded()
         } catch {
             if let authError = error as? LAError,
                authError.code == .userCancel || authError.code == .systemCancel {
@@ -1239,7 +1289,10 @@ final class AppStore {
         try persistRepositoryCatalog()
     }
 
-    private func loadRepository(repositoryID: String) async throws {
+    private func loadRepository(
+        repositoryID: String,
+        behavior: RepositoryLoadBehavior
+    ) async throws {
         let fallbackRepositoryID = repositories.contains(where: { $0.id == repositoryID })
             ? repositoryID
             : RepositoryReference.localRepositoryID
@@ -1248,8 +1301,9 @@ final class AppStore {
         let repositoryStore = currentRepositoryStore
         let reference = repositoryReference(for: currentRepositoryID)
         repositoryDescriptor = try repositoryStore.loadDescriptor() ?? reference?.descriptor ?? .local
+        let hasLocalSnapshot = try repositoryStore.loadSnapshot()
 
-        if let snapshot = try repositoryStore.loadSnapshot() {
+        if let snapshot = hasLocalSnapshot {
             applySnapshot(snapshot)
             upsertRepositoryReference(
                 repositoryID: currentRepositoryID,
@@ -1282,20 +1336,22 @@ final class AppStore {
             entries = []
             blogTags = RepositorySnapshot.defaultBlogTags
             repositorySharedUpdateNotificationScope = .all
+            if let reference {
+                upsertRepositoryReference(
+                    repositoryID: currentRepositoryID,
+                    descriptor: repositoryDescriptor,
+                    displayName: reference.displayName,
+                    snapshotUpdatedAt: reference.lastKnownSnapshotUpdatedAt,
+                    markAsOpened: true
+                )
+            }
         }
 
-        if repositoryDescriptor.isCloudBacked {
-            let snapshot = try await cloudService.loadSnapshot(using: repositoryDescriptor)
-            applySnapshot(snapshot)
-            try repositoryStore.saveCloudSnapshot(snapshot)
-            invalidateImageViews()
-            upsertRepositoryReference(
-                repositoryID: currentRepositoryID,
-                descriptor: repositoryDescriptor,
-                displayName: reference?.displayName ?? repositoryDescriptor.defaultDisplayName,
-                snapshotUpdatedAt: snapshot.updatedAt,
-                markAsOpened: true
-            )
+        if repositoryDescriptor.isCloudBacked,
+           behavior == .blockingCloudFetchIfNoLocalSnapshot,
+           hasLocalSnapshot == nil,
+           let reference {
+            try await refreshRepository(reference, trigger: .foreground)
         }
 
         try persistRepositoryCatalog()
@@ -1429,6 +1485,43 @@ final class AppStore {
         repositoryScope == .all ? preferences.sharedUpdateNotificationScope : repositoryScope
     }
 
+    private func refreshSharedRepositoriesIfNeededOnForeground() async {
+        guard shouldRefreshSharedRepositoriesOnForeground() else {
+            return
+        }
+
+        await refreshSharedRepositories(trigger: .foreground)
+    }
+
+    private func shouldRefreshSharedRepositoriesOnForeground() -> Bool {
+        let hasSharedRepositories = sortedRepositories.contains { $0.descriptor.isCloudBacked }
+        guard hasSharedRepositories else {
+            return false
+        }
+
+        guard let lastSharedRepositoryRefreshAt else {
+            return true
+        }
+
+        return now().timeIntervalSince(lastSharedRepositoryRefreshAt) >= Self.foregroundSharedRefreshMinimumInterval
+    }
+
+    private func runDeferredPostUnlockWorkIfNeeded() async {
+        let deferredSubscriptionRefresh = shouldEnsureSubscriptionsAfterUnlock
+        let deferredRefreshTrigger = pendingPostUnlockSharedRefreshTrigger
+
+        self.shouldEnsureSubscriptionsAfterUnlock = false
+        self.pendingPostUnlockSharedRefreshTrigger = nil
+
+        if deferredSubscriptionRefresh {
+            await ensureRepositorySubscriptions()
+        }
+
+        if let deferredRefreshTrigger {
+            await refreshSharedRepositories(trigger: deferredRefreshTrigger)
+        }
+    }
+
     private func refreshRepository(_ reference: RepositoryReference, trigger: SharedRepositoryRefreshTrigger) async throws {
         let repositoryStore = libraryStore.repositoryStore(for: reference.id)
         let mutationGenerationBeforeLoad = repositoryMutationGeneration(for: reference.id)
@@ -1497,6 +1590,15 @@ final class AppStore {
         if trigger != .launch {
             await scheduleLocalNotification(notification, includeBadge: shouldApplyBadge)
         }
+    }
+
+    private func silentlyRefreshCurrentRepository(trigger: SharedRepositoryRefreshTrigger) async {
+        guard let reference = repositoryReference(for: currentRepositoryID),
+              reference.descriptor.isCloudBacked else {
+            return
+        }
+
+        try? await refreshRepository(reference, trigger: trigger)
     }
 
     private func makeSharedRepositoryNotification(
@@ -1576,6 +1678,25 @@ final class AppStore {
 
     private func shouldApplySharedUpdateBadge(for trigger: SharedRepositoryRefreshTrigger) -> Bool {
         trigger == .push && !isApplicationActive
+    }
+
+    private func shouldBlockWhenSwitchingRepository(to repositoryID: String) -> Bool {
+        let fallbackRepositoryID = repositories.contains(where: { $0.id == repositoryID })
+            ? repositoryID
+            : RepositoryReference.localRepositoryID
+        guard fallbackRepositoryID != RepositoryReference.localRepositoryID else {
+            return false
+        }
+
+        let repositoryStore = libraryStore.repositoryStore(for: fallbackRepositoryID)
+        let descriptor = (try? repositoryStore.loadDescriptor())
+            ?? repositoryReference(for: fallbackRepositoryID)?.descriptor
+            ?? .local
+        guard descriptor.isCloudBacked else {
+            return false
+        }
+
+        return (try? repositoryStore.loadSnapshot()) == nil
     }
 
     private static func defaultBlogTag(in tags: [String]) -> String {

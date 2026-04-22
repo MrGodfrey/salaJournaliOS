@@ -623,6 +623,301 @@ final class SharingTests: AppStoreTestCase {
     }
 
     @MainActor
+    func testForegroundActivationRefreshesSharedRepositoriesOnlyAfterThreshold() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let updatedDate = fixtureDate("2026-04-16T11:00:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    kind: .blog,
+                    title: "Shared Blog",
+                    body: "Old content",
+                    happenedAt: initialDate,
+                    createdAt: initialDate,
+                    updatedAt: initialDate
+                )
+            ],
+            updatedAt: initialDate
+        )
+        let updatedSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    kind: .blog,
+                    title: "Shared Blog Updated",
+                    body: "New content",
+                    happenedAt: initialDate,
+                    createdAt: initialDate,
+                    updatedAt: updatedDate
+                )
+            ],
+            updatedAt: updatedDate
+        )
+
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(initialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "Shared Repository",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = initialSnapshot
+        var currentDate = fixtureDate("2026-04-16T12:00:00Z")
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { currentDate }
+        )
+
+        await store.loadIfNeeded()
+        XCTAssertEqual(cloudService.loadedDescriptors.count, 1)
+        XCTAssertEqual(store.entries.first?.title, "Shared Blog")
+
+        currentDate = fixtureDate("2026-04-16T12:10:00Z")
+        cloudService.loadedSnapshot = updatedSnapshot
+        await store.handleScenePhaseChange(.active)
+
+        XCTAssertEqual(cloudService.loadedDescriptors.count, 1)
+        XCTAssertEqual(store.entries.first?.title, "Shared Blog")
+
+        currentDate = fixtureDate("2026-04-16T12:31:00Z")
+        await store.handleScenePhaseChange(.active)
+
+        XCTAssertEqual(cloudService.loadedDescriptors.count, 2)
+        XCTAssertEqual(store.entries.first?.title, "Shared Blog Updated")
+    }
+
+    @MainActor
+    func testAutomaticForegroundRefreshFailureStaysSilentForCurrentSharedRepository() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    kind: .blog,
+                    title: "Shared Blog",
+                    body: "Old content",
+                    happenedAt: initialDate,
+                    createdAt: initialDate,
+                    updatedAt: initialDate
+                )
+            ],
+            updatedAt: initialDate
+        )
+
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(initialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "Shared Repository",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = initialSnapshot
+        var currentDate = fixtureDate("2026-04-16T12:00:00Z")
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { currentDate }
+        )
+
+        await store.loadIfNeeded()
+
+        currentDate = fixtureDate("2026-04-16T12:31:00Z")
+        cloudService.loadedSnapshot = nil
+        await store.handleScenePhaseChange(.active)
+
+        XCTAssertNil(store.alertMessage)
+        XCTAssertEqual(store.entries.first?.title, "Shared Blog")
+    }
+
+    @MainActor
+    func testManualRefreshFailureShowsAlertForCurrentSharedRepository() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    kind: .blog,
+                    title: "Shared Blog",
+                    body: "Old content",
+                    happenedAt: initialDate,
+                    createdAt: initialDate,
+                    updatedAt: initialDate
+                )
+            ],
+            updatedAt: initialDate
+        )
+
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(initialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "Shared Repository",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = initialSnapshot
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T12:00:00Z") }
+        )
+
+        await store.loadIfNeeded()
+
+        cloudService.loadedSnapshot = nil
+        await store.refreshSharedRepositories(trigger: .manual)
+
+        XCTAssertEqual(
+            store.alertMessage,
+            CloudRepositoryError.repositoryNotFound.errorDescription
+        )
+    }
+
+    @MainActor
+    func testSwitchingToCachedSharedRepositoryUsesLocalSnapshotWhenSilentRefreshFails() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let localDate = fixtureDate("2026-04-15T09:00:00Z")
+        let sharedDate = fixtureDate("2026-04-16T09:00:00Z")
+
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [makeEntry(title: "Local Entry", happenedAt: localDate)],
+                updatedAt: localDate
+            )
+        )
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    EntryRecord(
+                        kind: .blog,
+                        title: "Shared Blog",
+                        body: "Cached content",
+                        happenedAt: sharedDate,
+                        createdAt: sharedDate,
+                        updatedAt: sharedDate
+                    )
+                ],
+                updatedAt: sharedDate
+            )
+        )
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "Shared Repository",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: sharedDate
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: RepositoryReference.localRepositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T12:00:00Z") }
+        )
+
+        await store.loadIfNeeded()
+        cloudService.loadedDescriptors.removeAll()
+
+        await store.switchRepository(to: repositoryID)
+
+        XCTAssertEqual(store.currentRepositoryID, repositoryID)
+        XCTAssertEqual(store.entries.first?.title, "Shared Blog")
+        XCTAssertNil(store.alertMessage)
+        XCTAssertEqual(cloudService.loadedDescriptors, [sharedDescriptor])
+    }
+
+    @MainActor
     func testRefreshingSharedRepositoryDuringSaveKeepsNewJournalEntryVisibleAndPersisted() async throws {
         let storageRoot = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)

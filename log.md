@@ -711,3 +711,21 @@
 - 许可范围按当前项目诉求定义为：允许自由使用、修改、分发和商业使用，但商业使用必须注明原项目 `thatDay` 与仓库地址
 - `README.md` 已追加许可说明，并明确这是自定义协议，GitHub 可能不会按标准 SPDX/OSI 许可证自动识别
 - 本次未运行测试：仅新增许可证与文档说明，未改动应用代码、配置或测试入口
+
+## 2026-04-22 21:11
+
+- 共享仓库自动刷新策略调整：
+  - 启动时不再先显示全局 `Processing...` 再做共享同步；现在会先读取本地缓存，若开启了生物识别则先完成解锁，再静默执行启动后的共享同步
+  - 前台自动刷新新增 `30` 分钟阈值，不再每次回到前台都拉取共享仓库
+  - 推送触发和前台触发的自动刷新失败不再对当前共享仓库直接弹 `alert`；只有手动下拉刷新失败时才提示用户
+  - 切换到已经有本地缓存的共享仓库时，先展示本地快照并静默补拉远端；只有用户主动切到本地没有缓存的共享仓库时，才继续使用阻塞式加载
+- 代码结构同步调整：
+  - `thatDay/App/AppStore.swift` 新增前台自动刷新节流、解锁后延迟执行的共享同步任务，以及共享仓库切换时“本地缓存优先”的加载策略
+  - `thatDay/thatDayApp.swift` 去掉外层无条件的前台刷新调用，改由 `AppStore` 统一决定何时自动刷新
+- 测试与文档同步：
+  - `thatDayTests/SharingTests.swift` 新增前台刷新阈值、自动刷新静默失败、手动刷新报错和缓存共享仓库切换的回归用例
+  - `README.md` 已更新：补充“启动先解锁后静默同步”和“前台超过 30 分钟才自动刷新”的行为说明
+- 验证记录：
+  - `xcodebuild test -project /Users/wangyu/code/thatDay/thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-refresh-20260422 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/SharingTests -only-testing:thatDayTests/BiometricTests`
+    - 定向单元测试 `26/26` 通过
+    - `xcresult`: `/tmp/thatDay-refresh-20260422/Logs/Test/Test-thatDay-2026.04.22_21-09-34-+0800.xcresult`

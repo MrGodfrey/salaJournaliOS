@@ -64,9 +64,6 @@ struct thatDayApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     Task {
                         await store.handleScenePhaseChange(newPhase)
-                        if newPhase == .active {
-                            await store.refreshSharedRepositories(trigger: .foreground)
-                        }
                     }
                 }
         }
