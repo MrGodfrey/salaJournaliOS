@@ -729,3 +729,29 @@
   - `xcodebuild test -project /Users/wangyu/code/thatDay/thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-refresh-20260422 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/SharingTests -only-testing:thatDayTests/BiometricTests`
     - 定向单元测试 `26/26` 通过
     - `xcresult`: `/tmp/thatDay-refresh-20260422/Logs/Test/Test-thatDay-2026.04.22_21-09-34-+0800.xcresult`
+
+## 2026-04-24 07:20
+
+- CloudKit 共享刷新改为限流友好的链路：
+  - 手动下拉只刷新当前正在查看的共享仓库，不再一次扫描所有共享仓库
+  - 共享刷新会合并进行中的自动请求，避免启动、前台、推送和手动刷新叠加成重复请求
+  - 刷新先读取 `updatedAt` / `entryCount` metadata，未变化时跳过完整 payload 下载
+  - 捕获 CloudKit `retry-after` 后记录冷却时间；冷却期间自动同步跳过，手动刷新显示下次可重试时间
+- CloudKit 图片同步拆分为独立资产记录：
+  - `RepositoryRoot.payload` 不再内嵌图片数据，只保存正文快照 JSON
+  - 本地图片保存到 `RepositoryImageAsset`，使用 `reference`、`contentHash`、`payload` 字段
+  - 上传前按内容哈希跳过未变化图片，并按批次处理图片记录，降低大 payload 和重复上传触发限流的风险
+  - 修复 CloudKit asset 临时文件在异步保存期间的生命周期保持
+- 测试与文档同步：
+  - `README.md` 已更新：补充 retry-after 冷却、metadata 优先刷新、独立图片资产和本次完整验证结果
+  - `zh-Hans` 本地化新增 CloudKit 临时限流提示
+  - `SharingTests` 新增当前仓库手动刷新、metadata 跳过完整下载、retry-after 冷却回归用例
+  - `RoutingTests` 和测试 mock 更新为 metadata 优先链路
+  - UI 测试的 Blog 标签重排改为测试模式专用确定性入口，避免长按拖拽在全量测试中偶发失败；正式运行不显示该入口
+- 验证记录：
+  - 定向测试：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testSettingsBlogTagsReorderPersists`
+    - UI 测试 `1/1` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.24_07-12-38-+0800.xcresult`
+  - 完整测试：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+    - 完整测试通过；单元测试 `73/73` 通过，UI 测试 `28` 次执行全部通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.24_07-14-51-+0800.xcresult`

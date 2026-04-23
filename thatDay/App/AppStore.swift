@@ -107,6 +107,9 @@ final class AppStore {
     private var shouldEnsureSubscriptionsAfterUnlock = false
     private var pendingPostUnlockSharedRefreshTrigger: SharedRepositoryRefreshTrigger?
     private var lastSharedRepositoryRefreshAt: Date?
+    private var sharedCloudThrottleUntil: Date?
+    private var isSharedRepositoryRefreshInFlight = false
+    private var pendingSharedRepositoryRefreshTrigger: SharedRepositoryRefreshTrigger?
     private var repositoryMutationGenerations: [String: Int] = [:]
     private var repositoryMutationInFlightCounts: [String: Int] = [:]
     private var repositoriesPendingRefreshAfterMutation: Set<String> = []
@@ -756,6 +759,7 @@ final class AppStore {
             )
             sharingControllerItem = SharingControllerItem(controller: controller)
         } catch {
+            _ = recordSharedCloudThrottleIfNeeded(for: error)
             alertMessage = Self.userFacingMessage(for: error)
         }
     }
@@ -939,21 +943,45 @@ final class AppStore {
     }
 
     func refreshSharedRepositories(trigger: SharedRepositoryRefreshTrigger) async {
-        let sharedReferences = sortedRepositories.filter { $0.descriptor.isCloudBacked }
+        if isSharedRepositoryRefreshInFlight {
+            if trigger != .manual {
+                pendingSharedRepositoryRefreshTrigger = trigger
+            }
+            return
+        }
+
+        if let throttleUntil = activeSharedCloudThrottleUntil() {
+            if trigger == .manual {
+                alertMessage = sharedCloudThrottleMessage(until: throttleUntil)
+            }
+            return
+        }
+
+        let sharedReferences = sharedRepositoryReferences(for: trigger)
         guard !sharedReferences.isEmpty else {
             return
         }
 
+        isSharedRepositoryRefreshInFlight = true
         lastSharedRepositoryRefreshAt = now()
 
         for reference in sharedReferences {
             do {
                 try await refreshRepository(reference, trigger: trigger)
             } catch {
+                let throttleUntil = recordSharedCloudThrottleIfNeeded(for: error)
                 if trigger == .manual, reference.id == currentRepositoryID {
-                    alertMessage = Self.userFacingMessage(for: error)
+                    alertMessage = throttleUntil.map(sharedCloudThrottleMessage(until:))
+                        ?? Self.userFacingMessage(for: error)
                 }
             }
+        }
+
+        isSharedRepositoryRefreshInFlight = false
+
+        if let pendingTrigger = pendingSharedRepositoryRefreshTrigger {
+            pendingSharedRepositoryRefreshTrigger = nil
+            await refreshSharedRepositories(trigger: pendingTrigger)
         }
     }
 
@@ -1407,12 +1435,18 @@ final class AppStore {
             try persistRepositoryCatalog()
             await ensureRepositorySubscriptions()
         } catch {
+            _ = recordSharedCloudThrottleIfNeeded(for: error)
             storedError = error
         }
 
         let deferredRefreshReference = finishRepositoryMutation(for: repositoryID)
-        if let deferredRefreshReference {
-            try? await refreshRepository(deferredRefreshReference, trigger: .foreground)
+        if let deferredRefreshReference,
+           activeSharedCloudThrottleUntil() == nil {
+            do {
+                try await refreshRepository(deferredRefreshReference, trigger: .foreground)
+            } catch {
+                _ = recordSharedCloudThrottleIfNeeded(for: error)
+            }
         }
 
         if let storedError {
@@ -1456,8 +1490,65 @@ final class AppStore {
         try libraryStore.saveCatalog(repositories)
     }
 
+    private func sharedRepositoryReferences(for trigger: SharedRepositoryRefreshTrigger) -> [RepositoryReference] {
+        if trigger == .manual {
+            guard let currentRepositoryReference,
+                  currentRepositoryReference.descriptor.isCloudBacked else {
+                return []
+            }
+
+            return [currentRepositoryReference]
+        }
+
+        return sortedRepositories.filter { $0.descriptor.isCloudBacked }
+    }
+
+    private func activeSharedCloudThrottleUntil() -> Date? {
+        guard let sharedCloudThrottleUntil else {
+            return nil
+        }
+
+        if sharedCloudThrottleUntil > now() {
+            return sharedCloudThrottleUntil
+        }
+
+        self.sharedCloudThrottleUntil = nil
+        return nil
+    }
+
+    private func recordSharedCloudThrottleIfNeeded(for error: Error) -> Date? {
+        guard let retryAfterSeconds = Self.cloudKitRetryAfterSeconds(in: error) else {
+            return nil
+        }
+
+        let throttleUntil = now().addingTimeInterval(retryAfterSeconds)
+        if let existingThrottleUntil = sharedCloudThrottleUntil,
+           existingThrottleUntil > throttleUntil {
+            return existingThrottleUntil
+        }
+
+        sharedCloudThrottleUntil = throttleUntil
+        return throttleUntil
+    }
+
+    private func sharedCloudThrottleMessage(until throttleUntil: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = L10n.locale
+        formatter.timeStyle = .short
+        formatter.dateStyle = calendar.isDate(throttleUntil, inSameDayAs: now()) ? .none : .medium
+
+        return L10n.format(
+            "CloudKit is temporarily limiting sync. Try again after %@.",
+            formatter.string(from: throttleUntil)
+        )
+    }
+
     private func ensureRepositorySubscriptions() async {
         guard preferences.isSharedUpdateNotificationEnabled else {
+            return
+        }
+
+        guard activeSharedCloudThrottleUntil() == nil else {
             return
         }
 
@@ -1474,6 +1565,7 @@ final class AppStore {
             do {
                 try await cloudService.ensureRepositorySubscription(using: reference.descriptor)
             } catch {
+                _ = recordSharedCloudThrottleIfNeeded(for: error)
                 if reference.id == currentRepositoryID {
                     alertMessage = Self.userFacingMessage(for: error)
                 }
@@ -1526,6 +1618,14 @@ final class AppStore {
         let repositoryStore = libraryStore.repositoryStore(for: reference.id)
         let mutationGenerationBeforeLoad = repositoryMutationGeneration(for: reference.id)
         let previousSnapshot = try repositoryStore.loadSnapshot()
+        if let previousSnapshot {
+            let metadata = try await cloudService.loadSnapshotMetadata(using: reference.descriptor)
+            if previousSnapshot.updatedAt > metadata.updatedAt ||
+                (previousSnapshot.updatedAt == metadata.updatedAt && previousSnapshot.entries.count == metadata.entryCount) {
+                return
+            }
+        }
+
         let remoteSnapshot = try await cloudService.loadSnapshot(using: reference.descriptor)
         let normalizedRemoteSnapshot = remoteSnapshot.removingEmbeddedImages()
         let latestLocalSnapshot = try repositoryStore.loadSnapshot()
@@ -1598,7 +1698,15 @@ final class AppStore {
             return
         }
 
-        try? await refreshRepository(reference, trigger: trigger)
+        guard activeSharedCloudThrottleUntil() == nil else {
+            return
+        }
+
+        do {
+            try await refreshRepository(reference, trigger: trigger)
+        } catch {
+            _ = recordSharedCloudThrottleIfNeeded(for: error)
+        }
     }
 
     private func makeSharedRepositoryNotification(
@@ -1790,6 +1898,46 @@ final class AppStore {
         return L10n.string("An unexpected error occurred.")
     }
 
+    private static func cloudKitRetryAfterSeconds(in error: Error) -> TimeInterval? {
+        var retryAfterValues: [TimeInterval] = []
+
+        func append(_ value: Any?) {
+            switch value {
+            case let number as NSNumber where number.doubleValue > 0:
+                retryAfterValues.append(number.doubleValue)
+            case let double as Double where double > 0:
+                retryAfterValues.append(double)
+            case let integer as Int where integer > 0:
+                retryAfterValues.append(TimeInterval(integer))
+            default:
+                return
+            }
+        }
+
+        func collect(from error: Error) {
+            if let ckError = error as? CKError {
+                append(ckError.retryAfterSeconds)
+            }
+
+            let nsError = error as NSError
+            append(nsError.userInfo[CKErrorRetryAfterKey])
+
+            if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                collect(from: underlyingError)
+            }
+
+            if nsError.domain == CKErrorDomain,
+               let partialErrors = nsError.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: Error] {
+                for partialError in partialErrors.values {
+                    collect(from: partialError)
+                }
+            }
+        }
+
+        collect(from: error)
+        return retryAfterValues.max()
+    }
+
     private static func cloudKitProductionSchemaMessage(for error: Error) -> String? {
         guard let recordType = cloudKitProductionSchemaRecordType(in: error) else {
             return nil
@@ -1868,6 +2016,10 @@ private struct RepositoryUpdateNotification {
 }
 
 private struct PreviewCloudRepositoryService: CloudRepositoryServicing {
+    func loadSnapshotMetadata(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshotMetadata {
+        RepositorySnapshotMetadata(updatedAt: .distantPast, entryCount: 0)
+    }
+
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot {
         RepositorySnapshot(entries: [], blogTags: RepositorySnapshot.defaultBlogTags)
     }

@@ -136,8 +136,12 @@ class AppStoreTestCase: XCTestCase {
 
 final class MockCloudRepositoryService: CloudRepositoryServicing {
     var loadedSnapshot: RepositorySnapshot?
+    var loadedSnapshotsByRepositoryID: [String: RepositorySnapshot] = [:]
     var acceptedSharedRepository: AcceptedSharedRepository?
+    var loadMetadataError: Error?
+    var loadSnapshotError: Error?
     var savedSnapshots: [RepositorySnapshot] = []
+    var loadedMetadataDescriptors: [RepositoryDescriptor] = []
     var loadedDescriptors: [RepositoryDescriptor] = []
     var ensuredSubscriptionDescriptors: [RepositoryDescriptor] = []
     var acceptedShareURLs: [URL] = []
@@ -147,10 +151,31 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
 
     private var saveSnapshotContinuation: CheckedContinuation<Void, Never>?
 
+    func loadSnapshotMetadata(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshotMetadata {
+        loadedMetadataDescriptors.append(descriptor)
+
+        if let loadMetadataError {
+            throw loadMetadataError
+        }
+
+        if let loadedSnapshot = snapshot(for: descriptor) {
+            return RepositorySnapshotMetadata(
+                updatedAt: loadedSnapshot.updatedAt,
+                entryCount: loadedSnapshot.entries.count
+            )
+        }
+
+        throw CloudRepositoryError.repositoryNotFound
+    }
+
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot {
         loadedDescriptors.append(descriptor)
 
-        if let loadedSnapshot {
+        if let loadSnapshotError {
+            throw loadSnapshotError
+        }
+
+        if let loadedSnapshot = snapshot(for: descriptor) {
             return loadedSnapshot
         }
 
@@ -225,6 +250,10 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         }
 
         throw CloudRepositoryError.shareLinkInvalid
+    }
+
+    private func snapshot(for descriptor: RepositoryDescriptor) -> RepositorySnapshot? {
+        loadedSnapshotsByRepositoryID[descriptor.storageIdentifier] ?? loadedSnapshot
     }
 }
 

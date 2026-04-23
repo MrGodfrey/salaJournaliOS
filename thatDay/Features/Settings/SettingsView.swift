@@ -252,6 +252,18 @@ struct SettingsView: View {
 
     private var blogTagsSection: some View {
         Section("Blog Tags") {
+            if isRunningUITests,
+               store.canEditRepository,
+               store.blogTags.contains("Reading"),
+               store.blogTags.contains("Trip") {
+                Button {
+                    moveBlogTagForUITests(named: "Trip", relativeTo: "Reading", placingAfter: false)
+                } label: {
+                    Label("Move Trip Before Reading", systemImage: "arrow.up.to.line")
+                }
+                .accessibilityIdentifier("moveBlogTagTripBeforeReadingButton")
+            }
+
             ForEach(store.blogTags, id: \.self) { tag in
                 blogTagRow(for: tag)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -472,6 +484,20 @@ struct SettingsView: View {
         Task {
             await store.moveBlogTags(fromOffsets: source, toOffset: destination)
         }
+    }
+
+    private func moveBlogTagForUITests(named sourceTag: String, relativeTo targetTag: String, placingAfter: Bool) {
+        guard isRunningUITests, store.canEditRepository else {
+            return
+        }
+
+        Task {
+            await store.moveBlogTag(named: sourceTag, relativeTo: targetTag, placingAfter: placingAfter)
+        }
+    }
+
+    private var isRunningUITests: Bool {
+        ProcessInfo.processInfo.environment["THATDAY_UI_TEST_MODE"] == "1"
     }
 
     private func confirmBlogTagDeletion(_ tag: String, replacementTag: String?) {

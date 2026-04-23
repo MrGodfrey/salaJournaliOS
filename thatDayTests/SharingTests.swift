@@ -216,8 +216,8 @@ final class SharingTests: AppStoreTestCase {
         XCTAssertEqual(store.currentRepositoryID, sharedDescriptor.storageIdentifier)
         XCTAssertEqual(store.entries.first?.title, "Shared Blog")
         XCTAssertEqual(store.repositoryDescriptor.role, .viewer)
-        XCTAssertTrue(cloudService.loadedDescriptors.contains(sharedDescriptor))
-        XCTAssertGreaterThanOrEqual(cloudService.loadedDescriptors.count, 1)
+        XCTAssertTrue(cloudService.loadedMetadataDescriptors.contains(sharedDescriptor))
+        XCTAssertGreaterThanOrEqual(cloudService.loadedMetadataDescriptors.count, 1)
     }
 
     @MainActor
@@ -623,6 +623,234 @@ final class SharingTests: AppStoreTestCase {
     }
 
     @MainActor
+    func testManualRefreshOnlyFetchesCurrentSharedRepository() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let firstDescriptor = RepositoryDescriptor(
+            zoneName: "first-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "first-record",
+            role: .viewer
+        )
+        let secondDescriptor = RepositoryDescriptor(
+            zoneName: "second-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "second-record",
+            role: .viewer
+        )
+        let firstRepositoryID = firstDescriptor.storageIdentifier
+        let secondRepositoryID = secondDescriptor.storageIdentifier
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let updatedDate = fixtureDate("2026-04-16T11:00:00Z")
+        let firstInitialSnapshot = RepositorySnapshot(
+            entries: [makeEntry(kind: .blog, title: "First Old", happenedAt: initialDate)],
+            updatedAt: initialDate
+        )
+        let secondInitialSnapshot = RepositorySnapshot(
+            entries: [makeEntry(kind: .blog, title: "Second Old", happenedAt: initialDate)],
+            updatedAt: initialDate
+        )
+        let firstUpdatedSnapshot = RepositorySnapshot(
+            entries: [makeEntry(kind: .blog, title: "First Updated", happenedAt: updatedDate)],
+            updatedAt: updatedDate
+        )
+        let secondUpdatedSnapshot = RepositorySnapshot(
+            entries: [makeEntry(kind: .blog, title: "Second Updated", happenedAt: updatedDate)],
+            updatedAt: updatedDate
+        )
+
+        let firstStore = libraryStore.repositoryStore(for: firstRepositoryID)
+        try firstStore.saveDescriptor(firstDescriptor)
+        try firstStore.saveSnapshot(firstInitialSnapshot)
+        let secondStore = libraryStore.repositoryStore(for: secondRepositoryID)
+        try secondStore.saveDescriptor(secondDescriptor)
+        try secondStore.saveSnapshot(secondInitialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: firstRepositoryID,
+                displayName: "First Shared Repository",
+                descriptor: firstDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: firstInitialSnapshot.updatedAt
+            ),
+            RepositoryReference(
+                id: secondRepositoryID,
+                displayName: "Second Shared Repository",
+                descriptor: secondDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: secondInitialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: firstRepositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshotsByRepositoryID = [
+            firstRepositoryID: firstInitialSnapshot,
+            secondRepositoryID: secondInitialSnapshot
+        ]
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T12:00:00Z") }
+        )
+        await store.loadIfNeeded()
+
+        cloudService.loadedMetadataDescriptors.removeAll()
+        cloudService.loadedDescriptors.removeAll()
+        cloudService.loadedSnapshotsByRepositoryID[firstRepositoryID] = firstUpdatedSnapshot
+        cloudService.loadedSnapshotsByRepositoryID[secondRepositoryID] = secondUpdatedSnapshot
+
+        await store.refreshSharedRepositories(trigger: .manual)
+
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors, [firstDescriptor])
+        XCTAssertEqual(cloudService.loadedDescriptors, [firstDescriptor])
+        XCTAssertEqual(store.entries.first?.title, "First Updated")
+        XCTAssertEqual(try secondStore.loadSnapshot()?.entries.first?.title, "Second Old")
+    }
+
+    @MainActor
+    func testManualRefreshSkipsPayloadDownloadWhenMetadataIsUnchanged() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [makeEntry(kind: .blog, title: "Shared Blog", happenedAt: initialDate)],
+            updatedAt: initialDate
+        )
+
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(initialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "Shared Repository",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = initialSnapshot
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { self.fixtureDate("2026-04-16T12:00:00Z") }
+        )
+        await store.loadIfNeeded()
+
+        cloudService.loadedMetadataDescriptors.removeAll()
+        cloudService.loadedDescriptors.removeAll()
+        await store.refreshSharedRepositories(trigger: .manual)
+
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors, [sharedDescriptor])
+        XCTAssertTrue(cloudService.loadedDescriptors.isEmpty)
+        XCTAssertEqual(store.entries.first?.title, "Shared Blog")
+    }
+
+    @MainActor
+    func testManualRefreshHonorsCloudKitRetryAfterBeforeRetrying() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
+        let sharedDescriptor = RepositoryDescriptor(
+            zoneName: "shared-zone",
+            zoneOwnerName: "_owner_",
+            shareRecordName: "shared-record",
+            role: .viewer
+        )
+        let repositoryID = sharedDescriptor.storageIdentifier
+        let sharedStore = libraryStore.repositoryStore(for: repositoryID)
+        let initialDate = fixtureDate("2026-04-16T09:00:00Z")
+        let updatedDate = fixtureDate("2026-04-16T11:00:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [makeEntry(kind: .blog, title: "Shared Blog", happenedAt: initialDate)],
+            updatedAt: initialDate
+        )
+        let updatedSnapshot = RepositorySnapshot(
+            entries: [makeEntry(kind: .blog, title: "Shared Blog Updated", happenedAt: updatedDate)],
+            updatedAt: updatedDate
+        )
+
+        try sharedStore.saveDescriptor(sharedDescriptor)
+        try sharedStore.saveSnapshot(initialSnapshot)
+        try libraryStore.saveCatalog([
+            RepositoryReference.local,
+            RepositoryReference(
+                id: repositoryID,
+                displayName: "Shared Repository",
+                descriptor: sharedDescriptor,
+                source: .shared,
+                lastKnownSnapshotUpdatedAt: initialSnapshot.updatedAt
+            )
+        ])
+        try libraryStore.savePreferences(
+            AppPreferences(
+                defaultRepositoryID: repositoryID,
+                isBiometricLockEnabled: false,
+                isSharedUpdateNotificationEnabled: false
+            )
+        )
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = initialSnapshot
+        var currentDate = fixtureDate("2026-04-16T12:00:00Z")
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { currentDate }
+        )
+        await store.loadIfNeeded()
+
+        cloudService.loadedMetadataDescriptors.removeAll()
+        cloudService.loadedDescriptors.removeAll()
+        cloudService.loadMetadataError = NSError(
+            domain: CKErrorDomain,
+            code: CKError.Code.requestRateLimited.rawValue,
+            userInfo: [CKErrorRetryAfterKey: 120]
+        )
+
+        await store.refreshSharedRepositories(trigger: .manual)
+
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors.count, 1)
+        XCTAssertTrue(store.alertMessage?.contains("CloudKit is temporarily limiting sync") == true)
+
+        await store.refreshSharedRepositories(trigger: .manual)
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors.count, 1)
+
+        currentDate = fixtureDate("2026-04-16T12:02:01Z")
+        cloudService.loadMetadataError = nil
+        cloudService.loadedSnapshot = updatedSnapshot
+        await store.refreshSharedRepositories(trigger: .manual)
+
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors.count, 2)
+        XCTAssertEqual(cloudService.loadedDescriptors, [sharedDescriptor])
+        XCTAssertEqual(store.entries.first?.title, "Shared Blog Updated")
+    }
+
+    @MainActor
     func testForegroundActivationRefreshesSharedRepositoriesOnlyAfterThreshold() async throws {
         let storageRoot = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
@@ -693,20 +921,23 @@ final class SharingTests: AppStoreTestCase {
         )
 
         await store.loadIfNeeded()
-        XCTAssertEqual(cloudService.loadedDescriptors.count, 1)
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors.count, 1)
+        XCTAssertEqual(cloudService.loadedDescriptors.count, 0)
         XCTAssertEqual(store.entries.first?.title, "Shared Blog")
 
         currentDate = fixtureDate("2026-04-16T12:10:00Z")
         cloudService.loadedSnapshot = updatedSnapshot
         await store.handleScenePhaseChange(.active)
 
-        XCTAssertEqual(cloudService.loadedDescriptors.count, 1)
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors.count, 1)
+        XCTAssertEqual(cloudService.loadedDescriptors.count, 0)
         XCTAssertEqual(store.entries.first?.title, "Shared Blog")
 
         currentDate = fixtureDate("2026-04-16T12:31:00Z")
         await store.handleScenePhaseChange(.active)
 
-        XCTAssertEqual(cloudService.loadedDescriptors.count, 2)
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors.count, 2)
+        XCTAssertEqual(cloudService.loadedDescriptors.count, 1)
         XCTAssertEqual(store.entries.first?.title, "Shared Blog Updated")
     }
 
@@ -908,13 +1139,15 @@ final class SharingTests: AppStoreTestCase {
 
         await store.loadIfNeeded()
         cloudService.loadedDescriptors.removeAll()
+        cloudService.loadedMetadataDescriptors.removeAll()
 
         await store.switchRepository(to: repositoryID)
 
         XCTAssertEqual(store.currentRepositoryID, repositoryID)
         XCTAssertEqual(store.entries.first?.title, "Shared Blog")
         XCTAssertNil(store.alertMessage)
-        XCTAssertEqual(cloudService.loadedDescriptors, [sharedDescriptor])
+        XCTAssertEqual(cloudService.loadedMetadataDescriptors, [sharedDescriptor])
+        XCTAssertEqual(cloudService.loadedDescriptors, [])
     }
 
     @MainActor

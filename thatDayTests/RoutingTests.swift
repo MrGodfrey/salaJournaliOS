@@ -115,7 +115,7 @@ final class RoutingTests: AppStoreTestCase {
         XCTAssertEqual(store.selectedTab, .blog)
         XCTAssertEqual(store.entryOpenRequest?.repositoryID, sharedDescriptor.storageIdentifier)
         XCTAssertEqual(store.entryOpenRequest?.entryID, sharedEntry.id)
-        XCTAssertTrue(cloudService.loadedDescriptors.contains(sharedDescriptor))
+        XCTAssertTrue(cloudService.loadedMetadataDescriptors.contains(sharedDescriptor))
 
         let destination = try XCTUnwrap(store.consumeEntryOpenRequest(for: .blog))
         XCTAssertEqual(destination, .read(sharedEntry.id))

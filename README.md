@@ -80,8 +80,8 @@
 | 想统一查 Journal 和 Blog | `Search` 使用 iOS 原生搜索栏对两类内容统一检索，空查询不返回结果；输入时可一键清空关键词 |
 | 一台设备上可能有多座仓库 | 支持本地仓库、共享仓库、默认仓库切换和最近打开排序 |
 | 想备份、迁移或恢复数据 | 支持当前仓库导出 ZIP、导入 ZIP、清空当前仓库 |
-| 共享仓库变化后想及时知道 | 支持 CloudKit 共享、Journal / Blog 下拉刷新、应用启动后静默拉取、回到前台按时间阈值自动拉取、远端刷新、本地通知、应用角标和通知点击跳转；仓库主人可在 `CloudKit Sharing` 里设置仓库级提醒范围，本地 `Push Updates` 只会在主人选择 `All` 时对当前仓库生效 |
-| 共享仓库里的图片也要跟着走 | 共享快照会同时携带正文和本地图片，拉取后自动恢复到当前设备缓存 |
+| 共享仓库变化后想及时知道 | 支持 CloudKit 共享、Journal / Blog 下拉刷新、应用启动后静默拉取、回到前台按时间阈值自动拉取、远端刷新、本地通知、应用角标和通知点击跳转；手动下拉只刷新当前共享仓库，CloudKit 返回 retry-after 时会进入冷却，避免连续重试；仓库主人可在 `CloudKit Sharing` 里设置仓库级提醒范围，本地 `Push Updates` 只会在主人选择 `All` 时对当前仓库生效 |
+| 共享仓库里的图片也要跟着走 | 共享快照会同步正文和本地图片，图片在 CloudKit 中独立保存并按内容哈希跳过重复上传，拉取后自动恢复到当前设备缓存 |
 | 插图不能无限膨胀 | 选图后会自动压缩并保证单张图片保存到 `100KB` 以下 |
 
 ### 2.2 现在主线是否已经打通
@@ -106,7 +106,7 @@
 - 导入 ZIP 会覆盖当前仓库内容，不是增量合并
 - 插入图片统一转成 JPEG 并压到 `100KB` 以下；如果原图有透明区域，最终会以白底保存
 - CloudKit 共享、订阅和分享链接接受，依赖设备登录 iCloud 且容器配置正确
-- 首次把共享能力带到 TestFlight / App Store 对应的 CloudKit production 环境时，必须先把 development schema 部署到 production；当前项目至少需要 `RepositoryRoot` 记录类型，否则生成邀请时会报 `Cannot create new type RepositoryRoot in production schema`
+- 首次把共享能力带到 TestFlight / App Store 对应的 CloudKit production 环境时，必须先把 development schema 部署到 production；当前项目至少需要 `RepositoryRoot` 和 `RepositoryImageAsset` 记录类型，否则生成邀请或同步图片时可能报 `Cannot create new type ... in production schema`
 - 仓库根目录里虽然保留了 `lumina/` 前端原型目录，但当前 iOS App 的正式实现不依赖它
 
 ## 3. 用户接口
@@ -118,7 +118,7 @@
 - 全局层统一承载忙碌态、生物识别锁层、编辑器 sheet、设置页 sheet 和错误 alert
 - 当前 UI 文案、日期标题、月份/星期名称和系统权限提示支持英文与简体中文，默认跟随系统语言
 - 如果启用了生物识别解锁，应用打开或从后台回到前台时会先要求验证；启动时会先显示验证，再在解锁成功后静默同步共享仓库
-- 应用启动后会静默拉取已接入共享仓库的最新快照；应用回到前台时只有在距离上次共享同步超过 `30` 分钟后，才会再次自动静默刷新
+- 应用启动后会静默检查已接入共享仓库的最新快照；刷新会先读取 `updatedAt` / `entryCount` metadata，确认有变化才下载完整 payload；应用回到前台时只有在距离上次共享同步超过 `30` 分钟后，才会再次自动静默刷新
 - 如果共享仓库在应用未打开期间收到远端更新，应用角标会置为 `1`；只要应用进入前台，角标就会立刻清零
 
 ### 3.2 Journal
@@ -131,7 +131,7 @@
 - 可编辑仓库右下角有 `+` 新建 Journal；只读仓库不显示该按钮
 - 文章按“同月同日”聚合，直接展示文章卡片，不再额外显示年份分组标题
 - Journal 卡片日期会随语言本地化显示：英文为 `Thursday, 2026`，简体中文为 `2026年 星期四`，不再重复显示月日
-- 列表支持下拉刷新；如果当前正在看共享仓库，会立即重新拉取最新内容
+- 列表支持下拉刷新；如果当前正在看共享仓库，会检查当前仓库是否有最新内容；如果 CloudKit 要求稍后重试，会显示下次可重试时间
 
 ### 3.3 Calendar
 
@@ -163,7 +163,7 @@
 - 带图 Blog 卡片默认保留横版封面布局，也支持按文章切换为左侧竖图、右侧标题 / 四行摘要 / 日期标签的竖版布局
 - 每篇 Blog 会在日期后显示当前标签
 - Blog 文章不会进入 Journal / Calendar，但会被 Search 检索
-- 列表支持下拉刷新；如果当前正在看共享仓库，会立即重新拉取最新内容
+- 列表支持下拉刷新；如果当前正在看共享仓库，会检查当前仓库是否有最新内容；如果 CloudKit 要求稍后重试，会显示下次可重试时间
 
 ### 3.6 文章阅读与编辑
 
@@ -291,12 +291,14 @@ Application Support/thatDay/
 这部分现在是完整链路，不再只是“能生成分享链接”：
 
 - `CloudRepositoryService` 负责把整仓库快照保存到 CloudKit 的 `CKRecordZone`
-- 云端快照当前固定落在该 zone 里的 `RepositoryRoot` 记录，字段包括 `updatedAt`、`entryCount` 和 `payload`
+- 云端快照根记录固定落在该 zone 里的 `RepositoryRoot` 记录，字段包括 `updatedAt`、`entryCount` 和 `payload`；`payload` 保存不内嵌图片的 JSON，`updatedAt` / `entryCount` 用于轻量判断是否需要下载完整快照
+- 本地图片单独保存为 `RepositoryImageAsset` 记录，字段包括 `reference`、`contentHash` 和 `payload`；保存时会按内容哈希跳过未变化图片，并分批上传 / 下载图片资产
 - `thatDayApp.swift` 负责接住 scene/app 生命周期、远端推送和共享接受事件
 - `AppEventBridge.swift` 里的 `RepositoryRemoteChangeCenter` / `NotificationRouteCenter` 负责把系统事件桥接回 `AppStore`
-- `AppStore` 负责按启动 / 前台 / 推送 / 手动四类触发刷新共享仓库、比对快照差异、生成本地通知和应用角标，以及在点击通知后切换到对应仓库和文章
+- `AppStore` 负责按启动 / 前台 / 推送 / 手动四类触发刷新共享仓库、比对快照差异、生成本地通知和应用角标，以及在点击通知后切换到对应仓库和文章；刷新会合并进行中的重复请求，手动下拉只检查当前共享仓库
 - 共享所有者仍使用 `CKRecordZoneSubscription`；共享成员改用 `CKDatabaseSubscription` 监听 shared database，避免 shared database 不支持 zone subscription 的 CloudKit 报错
-- Journal / Blog 的手动下拉刷新会直接复用共享仓库拉取链路；启动后的自动刷新、推送后的静默刷新和回到前台超过 `30` 分钟后的静默刷新，也都走同一套快照比对逻辑
+- Journal / Blog 的手动下拉刷新会直接复用共享仓库拉取链路；启动后的自动刷新、推送后的静默刷新和回到前台超过 `30` 分钟后的静默刷新，也都走同一套 metadata 优先的快照比对逻辑
+- 如果 CloudKit 返回 retry-after，例如 `requestRateLimited`、`serviceUnavailable` 或嵌套在 partial failure 里的限流错误，应用会记录冷却时间；冷却期间自动同步会跳过，手动刷新会提示下次可重试时间，避免失败后立即重试形成 retry storm
 - 当共享仓库正在本地保存时，较旧的前台 / 推送刷新结果不会再覆盖当前设备刚写入的快照；新建或编辑后的文章会稳定留在列表里，不会先消失再晚点重新出现
 - 角标不再跟“是否读过某篇文章”绑定，只要共享更新发生在应用未打开期间就标 `1`，应用进入前台后立即清零
 
@@ -316,7 +318,7 @@ Application Support/thatDay/
 - 当前设备展示仓库内图片时，直接从本地 `file://` 路径读取，不再把仓库图片交给 `AsyncImage` 异步拉取，避免导入覆盖同名文件后当前设备误保留失败态
 - 导入、换图和共享刷新后，会显式刷新当前设备上的本地图片视图，避免“文件已经换了，但同一路径视图还停在旧状态”
 - 文章移除插图后，会同步清理仓库内已经失去引用的本地图片文件，避免导出和后续同步继续带上废弃图片
-- 同步到 CloudKit 时，会把当前快照引用到的本地图片一起写进共享快照；其他设备拉取后会自动恢复到本地 `images/` 目录
+- 同步到 CloudKit 时，会把当前快照引用到的本地图片写进独立图片资产记录；其他设备拉取后会自动恢复到本地 `images/` 目录
 
 ### 4.8 导入导出与迁移
 
@@ -370,6 +372,8 @@ xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug 
 
 单元测试和大多数 UI 测试会通过 `THATDAY_APP_LANGUAGE=en` 与 `-AppleLanguages (en)` 固定英文环境，避免不同系统语言影响断言；另有一条 UI 用例会显式切到简体中文验证本地化界面。
 
+UI 测试模式会在 Blog Tags 管理区暴露测试专用重排按钮，用于稳定验证标签顺序持久化；正式运行不会显示。
+
 ### 5.3 当前测试覆盖
 
 单元测试覆盖：
@@ -379,8 +383,8 @@ xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug 
 - Calendar 网格生成与月份切换
 - Blog 持久化、默认标签、标签删除 / 重排 / 打开筛选
 - Journal / Blog 总字数统计与数字缩写
-- 共享仓库接受、默认仓库启动、手动刷新、通知路由与图片恢复
-- 共享仓库保存时图片会跟着上传到云端快照
+- 共享仓库接受、默认仓库启动、手动刷新、metadata 跳过完整下载、CloudKit retry-after 冷却、通知路由与图片恢复
+- 共享仓库保存时图片会跟着上传到云端图片资产
 - 生物识别开关与前后台再认证
 - ZIP 导入导出回环、权限错误映射与清空仓库
 - 图片落盘压缩到 `100KB` 以下
@@ -391,18 +395,18 @@ UI 测试覆盖：
 - Calendar 月份切换、`Today`、标签统计点击跳转与内容宽度
 - Blog 新建 / 编辑 / 删除、图片布局持久化、标签筛选与 Search 联动
 - Blog 详情在无图 / 竖图场景下的布局
-- Settings 打开、Blog 标签拖拽重排、只读仓库隐藏创建入口
+- Settings 打开、Blog 标签重排持久化、只读仓库隐藏创建入口
 - 简体中文界面文案、tab 标题与日期头部显示
 - Launch tests 的不同外观与方向组合
 
 ### 5.4 最近一次完整验证
 
-- 时间：2026-04-21 21:03 - 21:09（Asia/Shanghai）
+- 时间：2026-04-24 07:14 - 07:20（Asia/Shanghai）
 - 命令：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
 - 结果：通过
-- 单元测试：66 项通过
+- 单元测试：73 项通过
 - UI 测试：28 次执行通过（20 个常规 UI 用例 + 8 个 Launch test 动态参数运行）
-- xcresult：`/tmp/thatDay-full-20260421-2/Logs/Test/Test-thatDay-2026.04.21_21-03-39-+0800.xcresult`
+- xcresult：`/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.24_07-14-51-+0800.xcresult`
 
 ### 5.5 本次测试里看到但不属于业务失败的问题
 

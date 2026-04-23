@@ -382,7 +382,7 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
-    func testSettingsBlogTagsReorderWithLongPressDrag() throws {
+    func testSettingsBlogTagsReorderPersists() throws {
         let app = launchApp(seed: .taggedBlog)
 
         XCTAssertTrue(app.buttons["openSettingsButton"].waitForExistence(timeout: 5))
@@ -393,7 +393,9 @@ final class thatDayUITests: XCTestCase {
         XCTAssertTrue(readingRow.waitForExistence(timeout: 5))
         XCTAssertTrue(tripRow.waitForExistence(timeout: 5))
 
-        tripRow.press(forDuration: 1.2, thenDragTo: readingRow)
+        let moveTripButton = app.buttons["moveBlogTagTripBeforeReadingButton"]
+        XCTAssertTrue(moveTripButton.waitForExistence(timeout: 5))
+        moveTripButton.tap()
 
         XCTAssertTrue(waitUntil(timeout: 5) {
             tripRow.frame.minY < readingRow.frame.minY

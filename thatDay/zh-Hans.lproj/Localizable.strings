@@ -36,6 +36,7 @@
 "Clear Current Repository" = "清空当前仓库";
 "Clear the current repository?" = "清空当前仓库？";
 "CloudKit Sharing" = "CloudKit 共享";
+"CloudKit is temporarily limiting sync. Try again after %@." = "CloudKit 正在临时限制同步，请在 %@ 后重试。";
 "Content" = "内容";
 "Current Access" = "当前权限";
 "Current Repository" = "当前仓库";
