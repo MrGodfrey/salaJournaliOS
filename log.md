@@ -789,3 +789,13 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
     - 单元测试 `75/75` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.24_14-35-42-+0800.xcresult`
+
+## 2026-04-24 14:52
+
+- 取消 Blog 列表区域左右滑动切换展示标签功能：
+  - 删除 `BlogView` 上的标签切换拖拽手势
+  - 删除 `AppStore.moveSelectedBlogTag(by:)`
+  - 删除不再使用的 `HorizontalSwipeDirection` 工具
+- 删除 Blog 滑动切换标签相关测试：
+  - 移除 `testBlogTagHorizontalSwipeMovesAcrossFilterOptions`
+- `README.md` 已同步撤掉 Blog 列表滑动切换标签说明；Blog 标签切换继续通过顶部标签条完成
