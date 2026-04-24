@@ -755,3 +755,37 @@
   - 完整测试：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
     - 完整测试通过；单元测试 `73/73` 通过，UI 测试 `28` 次执行全部通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.24_07-14-51-+0800.xcresult`
+
+## 2026-04-24 14:33
+
+- Journal 列表区域新增左右滑动切日：
+  - 左滑进入后一天，右滑回到前一天
+  - 复用统一水平滑动判定，短距离或明显纵向拖动不会触发切换
+- Blog 列表区域新增左右滑动切换当前展示标签：
+  - 左滑进入下一个标签，右滑回到上一个标签
+  - 切换范围包含 `All` 和当前仓库所有 Blog 标签，并在首尾保持当前选择
+- Search 原生搜索栏修复中文输入法组合态：
+  - 拼音处于 marked text 期间不再把 `UISearchBar` 内容同步到绑定状态
+  - SwiftUI 更新期间也不会把旧绑定值回写到正在组合输入的搜索栏，避免输入 `wang` 后被提前提交为英文
+- 测试与文档同步：
+  - `JournalTests` 新增 Journal 滑动切日前后一天、短距离 / 纵向拖动忽略、搜索栏 marked text 保护用例
+  - `BlogTagTests` 新增 Blog 标签滑动切换用例
+  - `README.md` 已更新：补充 Journal / Blog 滑动快捷方式和 Search 中文输入法保护说明
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `77/77` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.24_14-30-28-+0800.xcresult`
+
+## 2026-04-24 14:43
+
+- 取消 Journal 列表区域左右滑动切日功能：
+  - 删除 `JournalView` 上的日期切换拖拽手势
+  - 保留顶部 `Previous / Next` 按钮切换日期，避免和列表上下滚动体验冲突
+- 删除 Journal 滑动切日相关测试：
+  - 移除 `testJournalHorizontalSwipeMovesToNextAndPreviousDay`
+  - 移除 Journal 测试文件里为该手势补充的短距离 / 纵向拖动判定用例
+- `README.md` 已同步撤掉 Journal 滑动切日说明，保留 Blog 标签滑动和 Search 中文输入法修复说明
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `75/75` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.24_14-35-42-+0800.xcresult`

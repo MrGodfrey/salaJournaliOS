@@ -1,3 +1,4 @@
+import CoreGraphics
 import XCTest
 @testable import thatDay
 
@@ -296,6 +297,35 @@ final class BlogTagTests: AppStoreTestCase {
 
         XCTAssertEqual(store.selectedTab, .blog)
         XCTAssertEqual(store.selectedBlogTag, "Trip")
+    }
+
+    @MainActor
+    func testBlogTagHorizontalSwipeMovesAcrossFilterOptions() async throws {
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: [],
+            blogTags: ["Reading", "Trip", "note"]
+        )
+        await store.loadIfNeeded()
+
+        let leftSwipe = try XCTUnwrap(
+            HorizontalSwipeDirection.direction(for: CGSize(width: -96, height: 6))
+        )
+        store.moveSelectedBlogTag(by: leftSwipe.pageOffset)
+        XCTAssertEqual(store.selectedBlogTag, "Reading")
+
+        store.moveSelectedBlogTag(by: leftSwipe.pageOffset)
+        XCTAssertEqual(store.selectedBlogTag, "Trip")
+
+        let rightSwipe = try XCTUnwrap(
+            HorizontalSwipeDirection.direction(for: CGSize(width: 96, height: 6))
+        )
+        store.moveSelectedBlogTag(by: rightSwipe.pageOffset)
+        XCTAssertEqual(store.selectedBlogTag, "Reading")
+
+        store.selectedBlogTag = "note"
+        store.moveSelectedBlogTag(by: leftSwipe.pageOffset)
+        XCTAssertEqual(store.selectedBlogTag, "note")
     }
 
     @MainActor

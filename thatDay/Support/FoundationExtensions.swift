@@ -1,5 +1,36 @@
 import Foundation
 import NaturalLanguage
+import CoreGraphics
+
+enum HorizontalSwipeDirection: Equatable {
+    case left
+    case right
+
+    nonisolated var pageOffset: Int {
+        switch self {
+        case .left:
+            return 1
+        case .right:
+            return -1
+        }
+    }
+
+    nonisolated static func direction(
+        for translation: CGSize,
+        minimumDistance: CGFloat = 48,
+        dominanceRatio: CGFloat = 1.25
+    ) -> HorizontalSwipeDirection? {
+        let horizontalDistance = abs(translation.width)
+        let verticalDistance = abs(translation.height)
+
+        guard horizontalDistance >= minimumDistance,
+              horizontalDistance > verticalDistance * dominanceRatio else {
+            return nil
+        }
+
+        return translation.width < 0 ? .left : .right
+    }
+}
 
 extension String {
     nonisolated var trimmed: String {

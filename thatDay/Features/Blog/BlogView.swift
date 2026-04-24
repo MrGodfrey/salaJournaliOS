@@ -14,6 +14,17 @@ struct BlogView: View {
         return store.blogEntries.filter { $0.blogTag == selectedTag }
     }
 
+    private var tagSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                guard let direction = HorizontalSwipeDirection.direction(for: value.translation) else {
+                    return
+                }
+
+                store.moveSelectedBlogTag(by: direction.pageOffset)
+            }
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             VStack(spacing: 0) {
@@ -63,6 +74,8 @@ struct BlogView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .contentShape(Rectangle())
+                .simultaneousGesture(tagSwipeGesture)
                 .refreshable {
                     await store.refreshSharedRepositories(trigger: .manual)
                 }

@@ -92,6 +92,20 @@ struct SearchView: View {
     }
 }
 
+enum SearchBarTextSynchronization {
+    nonisolated static func shouldCommitUIKitChange(hasMarkedText: Bool) -> Bool {
+        !hasMarkedText
+    }
+
+    nonisolated static func shouldApplyBindingChange(
+        currentText: String?,
+        bindingText: String,
+        hasMarkedText: Bool
+    ) -> Bool {
+        !hasMarkedText && currentText != bindingText
+    }
+}
+
 private struct SearchBar: UIViewRepresentable {
     @Binding var text: String
     let placeholder: String
@@ -117,7 +131,11 @@ private struct SearchBar: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UISearchBar, context: Context) {
-        if uiView.text != text {
+        if SearchBarTextSynchronization.shouldApplyBindingChange(
+            currentText: uiView.text,
+            bindingText: text,
+            hasMarkedText: uiView.searchTextField.isComposingMarkedText
+        ) {
             uiView.text = text
         }
     }
@@ -130,11 +148,38 @@ private struct SearchBar: UIViewRepresentable {
         }
 
         func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+            guard SearchBarTextSynchronization.shouldCommitUIKitChange(
+                hasMarkedText: searchBar.searchTextField.isComposingMarkedText
+            ) else {
+                return
+            }
+
             text = searchText
         }
 
         func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+            syncCommittedText(from: searchBar)
             searchBar.resignFirstResponder()
         }
+
+        func searchBarTextDidEndEditing(_ searchBar: UISearchBar) {
+            syncCommittedText(from: searchBar)
+        }
+
+        private func syncCommittedText(from searchBar: UISearchBar) {
+            guard SearchBarTextSynchronization.shouldCommitUIKitChange(
+                hasMarkedText: searchBar.searchTextField.isComposingMarkedText
+            ) else {
+                return
+            }
+
+            text = searchBar.text ?? ""
+        }
+    }
+}
+
+private extension UITextField {
+    var isComposingMarkedText: Bool {
+        markedTextRange != nil
     }
 }

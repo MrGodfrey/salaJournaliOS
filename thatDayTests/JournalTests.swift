@@ -133,6 +133,24 @@ final class JournalTests: AppStoreTestCase {
         XCTAssertEqual(Calendar.current.dayIdentifier(for: store.selectedDate), "2026-04-16")
     }
 
+    func testSearchBarTextSynchronizationPreservesMarkedTextComposition() {
+        XCTAssertFalse(SearchBarTextSynchronization.shouldCommitUIKitChange(hasMarkedText: true))
+        XCTAssertFalse(
+            SearchBarTextSynchronization.shouldApplyBindingChange(
+                currentText: "wangx",
+                bindingText: "wang",
+                hasMarkedText: true
+            )
+        )
+        XCTAssertTrue(
+            SearchBarTextSynchronization.shouldApplyBindingChange(
+                currentText: "wang",
+                bindingText: "王",
+                hasMarkedText: false
+            )
+        )
+    }
+
     @MainActor
     func testSettingDisplayedMonthUpdatesMonthAndYear() async throws {
         let store = try makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))

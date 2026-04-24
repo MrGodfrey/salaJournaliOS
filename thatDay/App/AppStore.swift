@@ -687,6 +687,18 @@ final class AppStore {
         selectedTab = .blog
     }
 
+    func moveSelectedBlogTag(by offset: Int) {
+        guard offset != 0 else {
+            return
+        }
+
+        let options: [String?] = [nil] + blogTags.map(Optional.some)
+        let currentTag = matchedBlogTag(for: selectedBlogTag)
+        let currentIndex = options.firstIndex { $0 == currentTag } ?? 0
+        let nextIndex = min(max(currentIndex + offset, 0), options.count - 1)
+        selectedBlogTag = options[nextIndex]
+    }
+
     func previousMonth() {
         displayedMonth = calendar.date(byAdding: .month, value: -1, to: displayedMonth) ?? displayedMonth
     }
