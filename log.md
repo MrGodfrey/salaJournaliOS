@@ -829,3 +829,34 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-pageview-3 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/JournalTests`
     - `JournalTests` `21/21` 通过
     - `xcresult`: `/tmp/thatDay-pageview-3/Logs/Test/Test-thatDay-2026.04.28_10-13-59-+0800.xcresult`
+
+## 2026-04-28 11:59
+
+- Blog 页面切换展示标签改为 `UIPageViewController` 系统分页：
+  - 内容区左滑进入下一个标签页，右滑回到上一个标签页，保留顶部标签条作为明确入口
+  - 分页顺序为 `All` 加当前仓库 Blog 标签顺序，每个标签页使用独立 SwiftUI hosted `List`
+  - 由 `UIPageViewController` 处理水平翻页手势、垂直列表滚动冲突和系统滚动转场
+  - 顶部标签条点击、日历标签统计跳转和手势切换共用同一套标签状态，快速切换时缓存待应用标签，避免动画中途状态错乱
+- `AppStore` 补充 Blog 分页需要的标签接口：
+  - 支持按显式标签读取 Blog entries，避免预加载相邻标签页时改动当前选中标签
+  - 支持按当前标签顺序计算前后标签页，并在 `All` / 最后一个标签边界处保持当前页
+- 测试与文档同步：
+  - `BlogTagTests` 新增显式标签页读取和标签页边界计算用例
+  - `thatDayUITests` 新增 Blog `UIPageViewController` 左右滑动切标签用例，以及 seeded 多条 Blog 的翻页性能用例
+  - `thatDayApp` 新增 `blog-performance` UI 测试 seed
+  - `zh-Hans` 本地化新增标签选中态 accessibility 文案
+  - `README.md` 已更新：补充 Blog 内容区系统级左右翻页和性能测试覆盖
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-blog-pageview-1 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/BlogTagTests/testBlogEntriesForExplicitTagDoNotMutateSelectedTag -only-testing:thatDayTests/BlogTagTests/testBlogTagByAddingClampsAcrossAllAndTags`
+    - 定向单元测试 `2/2` 通过
+    - `xcresult`: `/tmp/thatDay-blog-pageview-1/Logs/Test/Test-thatDay-2026.04.28_11-56-11-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-blog-pageview-2 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testBlogTagSwipeSwitchesFiltersWithPageViewController -only-testing:thatDayUITests/thatDayUITests/testBlogTagSwipeAnimationPerformance`
+    - 定向 UI 测试 `2/2` 通过
+    - 性能用例 `5` 次往返滑动平均 Clock `1.491s`、CPU `0.316s`、Memory Peak Physical 约 `66.3MB`
+    - `xcresult`: `/tmp/thatDay-blog-pageview-2/Logs/Test/Test-thatDay-2026.04.28_11-57-05-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-blog-pageview-3 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/BlogTagTests`
+    - `BlogTagTests` `11/11` 通过
+    - `xcresult`: `/tmp/thatDay-blog-pageview-3/Logs/Test/Test-thatDay-2026.04.28_11-58-35-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-blog-pageview-4 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testBlogTagSwipeSwitchesFiltersWithPageViewController`
+    - 本地化 accessibility 文案接入后复跑 UI 滑动用例 `1/1` 通过
+    - `xcresult`: `/tmp/thatDay-blog-pageview-4/Logs/Test/Test-thatDay-2026.04.28_12-00-51-+0800.xcresult`

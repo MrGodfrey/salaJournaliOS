@@ -319,6 +319,32 @@ final class AppStore {
             }
     }
 
+    func blogEntries(for tag: String?) -> [EntryRecord] {
+        guard let matchedTag = matchedBlogTag(for: tag) else {
+            return blogEntries
+        }
+
+        return blogEntries.filter { $0.blogTag == matchedTag }
+    }
+
+    var blogTagPageSelections: [String?] {
+        var selections: [String?] = [nil]
+        selections.append(contentsOf: blogTags.map { Optional.some($0) })
+        return selections
+    }
+
+    func blogTagPageIndex(for tag: String?) -> Int {
+        let matchedTag = matchedBlogTag(for: tag)
+        return blogTagPageSelections.firstIndex { $0 == matchedTag } ?? 0
+    }
+
+    func blogTag(byAdding offset: Int, to tag: String?) -> String? {
+        let selections = blogTagPageSelections
+        let currentIndex = blogTagPageIndex(for: tag)
+        let targetIndex = min(max(currentIndex + offset, 0), selections.count - 1)
+        return selections[targetIndex]
+    }
+
     var journalEntryCount: Int {
         entries.filter { $0.kind == .journal }.count
     }
@@ -697,8 +723,12 @@ final class AppStore {
     }
 
     func openBlog(tag: String? = nil) {
-        selectedBlogTag = matchedBlogTag(for: tag)
+        selectBlogTag(tag)
         selectedTab = .blog
+    }
+
+    func selectBlogTag(_ tag: String?) {
+        selectedBlogTag = matchedBlogTag(for: tag)
     }
 
     func previousMonth() {

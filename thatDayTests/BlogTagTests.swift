@@ -331,4 +331,58 @@ final class BlogTagTests: AppStoreTestCase {
         XCTAssertEqual(store.selectedBlogTag, "Trip")
         XCTAssertEqual(filteredTitles, ["Trip Recap"])
     }
+
+    @MainActor
+    func testBlogEntriesForExplicitTagDoNotMutateSelectedTag() async throws {
+        let entries = [
+            makeEntry(
+                kind: .blog,
+                title: "Reading Summary",
+                blogTag: "Reading",
+                happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+            ),
+            makeEntry(
+                kind: .blog,
+                title: "Trip Recap",
+                blogTag: "Trip",
+                happenedAt: fixtureDate("2026-04-15T09:00:00Z")
+            ),
+            makeEntry(
+                title: "Ignored Journal",
+                happenedAt: fixtureDate("2026-04-14T09:00:00Z")
+            )
+        ]
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: entries,
+            blogTags: ["Reading", "Trip", "note"]
+        )
+
+        await store.loadIfNeeded()
+        store.selectBlogTag("Reading")
+
+        let tripEntries = store.blogEntries(for: "Trip")
+
+        XCTAssertEqual(tripEntries.map(\.title), ["Trip Recap"])
+        XCTAssertEqual(store.selectedBlogTag, "Reading")
+        XCTAssertEqual(store.blogEntries(for: nil).map(\.title), ["Reading Summary", "Trip Recap"])
+    }
+
+    @MainActor
+    func testBlogTagByAddingClampsAcrossAllAndTags() async throws {
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: [],
+            blogTags: ["Reading", "Trip", "note"]
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertNil(store.blogTag(byAdding: -1, to: nil))
+        XCTAssertEqual(store.blogTag(byAdding: 1, to: nil), "Reading")
+        XCTAssertEqual(store.blogTag(byAdding: 1, to: "Reading"), "Trip")
+        XCTAssertEqual(store.blogTag(byAdding: -1, to: "Reading"), nil)
+        XCTAssertEqual(store.blogTag(byAdding: 1, to: "note"), "note")
+        XCTAssertEqual(store.blogTagPageIndex(for: "Trip"), 2)
+    }
 }

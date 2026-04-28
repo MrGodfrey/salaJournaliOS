@@ -91,6 +91,7 @@
 "No data was found for the current shared repository." = "当前共享仓库没有找到数据。";
 "No journal entries on this day" = "这一天还没有日记";
 "No posts in %@" = "%@ 下暂无文章";
+"Not selected" = "未选中";
 "Notification permission is disabled, so shared repository updates cannot be delivered." = "通知权限未开启，因此无法接收共享仓库更新。";
 "Notifications" = "通知";
 "Notice" = "提示";
@@ -111,6 +112,7 @@
 "Search" = "搜索";
 "Search titles or content" = "搜索标题或内容";
 "Security" = "安全";
+"Selected" = "已选中";
 "Selected images are automatically compressed below 100KB." = "所选图片会自动压缩到 100KB 以下。";
 "Settings" = "设置";
 "Shared Member (Can Edit)" = "共享成员（可编辑）";

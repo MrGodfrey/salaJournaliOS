@@ -313,6 +313,63 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testBlogTagSwipeSwitchesFiltersWithPageViewController() throws {
+        let app = launchApp(seed: .taggedBlog, tapAfterLaunch: false)
+
+        app.tabBars.buttons["Blog"].tap()
+
+        let allFilter = app.buttons["blogTagFilter-All"]
+        let readingFilter = app.buttons["blogTagFilter-Reading"]
+        let tripFilter = app.buttons["blogTagFilter-Trip"]
+        XCTAssertTrue(allFilter.waitForExistence(timeout: 5))
+        XCTAssertTrue(blogPage(in: app).waitForExistence(timeout: 5))
+        XCTAssertEqual(allFilter.value as? String, "Selected")
+
+        blogPage(in: app).swipeLeft()
+        XCTAssertTrue(waitUntil(timeout: 3) { readingFilter.value as? String == "Selected" })
+
+        blogPage(in: app).swipeLeft()
+        XCTAssertTrue(waitUntil(timeout: 3) { tripFilter.value as? String == "Selected" })
+
+        blogPage(in: app).swipeRight()
+        XCTAssertTrue(waitUntil(timeout: 3) { readingFilter.value as? String == "Selected" })
+    }
+
+    @MainActor
+    func testBlogTagSwipeAnimationPerformance() throws {
+        let app = launchApp(seed: .blogPerformance, tapAfterLaunch: false)
+
+        app.tabBars.buttons["Blog"].tap()
+
+        let allFilter = app.buttons["blogTagFilter-All"]
+        let readingFilter = app.buttons["blogTagFilter-Reading"]
+        XCTAssertTrue(allFilter.waitForExistence(timeout: 5))
+        XCTAssertTrue(blogPage(in: app).waitForExistence(timeout: 5))
+        XCTAssertEqual(allFilter.value as? String, "Selected")
+
+        var metrics: [XCTMetric] = [
+            XCTClockMetric(),
+            XCTCPUMetric(application: app),
+            XCTMemoryMetric(application: app),
+            XCTOSSignpostMetric.scrollingAndDecelerationMetric
+        ]
+        if #available(iOS 26.0, *) {
+            metrics.append(XCTHitchMetric(application: app))
+        }
+
+        let options = XCTMeasureOptions()
+        options.iterationCount = 5
+
+        measure(metrics: metrics, options: options) {
+            blogPage(in: app).swipeLeft()
+            XCTAssertTrue(waitUntil(timeout: 3) { readingFilter.value as? String == "Selected" })
+
+            blogPage(in: app).swipeRight()
+            XCTAssertTrue(waitUntil(timeout: 3) { allFilter.value as? String == "Selected" })
+        }
+    }
+
+    @MainActor
     func testPortraitBlogCardUsesSideBySideLayout() throws {
         let app = launchApp(seed: .portraitBlog)
 
@@ -589,6 +646,12 @@ final class thatDayUITests: XCTestCase {
         return searchField.buttons.firstMatch
     }
 
+    private func blogPage(in app: XCUIApplication) -> XCUIElement {
+        app.collectionViews
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "blogTagPage-"))
+            .firstMatch
+    }
+
     private func waitUntil(timeout: TimeInterval, condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -605,6 +668,7 @@ final class thatDayUITests: XCTestCase {
 
 private enum UITestSeedScenario: String {
     case taggedBlog = "tagged-blog"
+    case blogPerformance = "blog-performance"
     case portraitBlog = "portrait-blog"
     case journalPerformance = "journal-performance"
     case readOnlyRepository = "read-only-repository"

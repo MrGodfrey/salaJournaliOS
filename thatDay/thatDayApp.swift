@@ -153,6 +153,7 @@ private extension ProcessInfo {
 
 private enum UITestSeedScenario: String {
     case taggedBlog = "tagged-blog"
+    case blogPerformance = "blog-performance"
     case portraitBlog = "portrait-blog"
     case journalPerformance = "journal-performance"
     case readOnlyRepository = "read-only-repository"
@@ -161,6 +162,8 @@ private enum UITestSeedScenario: String {
         switch self {
         case .taggedBlog:
             try prepareTaggedBlogRepository(in: libraryStore)
+        case .blogPerformance:
+            try prepareBlogPerformanceRepository(in: libraryStore)
         case .portraitBlog:
             try preparePortraitBlogRepository(in: libraryStore)
         case .journalPerformance:
@@ -231,6 +234,41 @@ private enum UITestSeedScenario: String {
                 ],
                 updatedAt: happenedAt,
                 blogTags: ["Watching", "note"]
+            )
+        )
+        try libraryStore.savePreferences(AppPreferences())
+    }
+
+    private func prepareBlogPerformanceRepository(in libraryStore: RepositoryLibraryStore) throws {
+        let repositoryStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let tags = ["Reading", "Trip", "Watching", "note"]
+        let baseDate = Self.fixtureDate("2026-04-16T09:00:00Z")
+        var entries: [EntryRecord] = []
+
+        for (tagIndex, tag) in tags.enumerated() {
+            for index in 1...12 {
+                let timestamp = baseDate.addingTimeInterval(TimeInterval((tagIndex * 100) + index) * 60)
+                entries.append(
+                    EntryRecord(
+                        id: UUID(),
+                        kind: .blog,
+                        title: "\(tag) Performance Blog \(index)",
+                        body: "This seeded blog post gives the Blog page enough rows to exercise tag page transition rendering.",
+                        blogTag: tag,
+                        happenedAt: timestamp,
+                        createdAt: timestamp,
+                        updatedAt: timestamp
+                    )
+                )
+            }
+        }
+
+        try repositoryStore.saveDescriptor(.local)
+        try repositoryStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: entries,
+                updatedAt: baseDate,
+                blogTags: tags
             )
         )
         try libraryStore.savePreferences(AppPreferences())
