@@ -154,6 +154,7 @@ private extension ProcessInfo {
 private enum UITestSeedScenario: String {
     case taggedBlog = "tagged-blog"
     case portraitBlog = "portrait-blog"
+    case journalPerformance = "journal-performance"
     case readOnlyRepository = "read-only-repository"
 
     func prepare(in libraryStore: RepositoryLibraryStore) throws {
@@ -162,6 +163,8 @@ private enum UITestSeedScenario: String {
             try prepareTaggedBlogRepository(in: libraryStore)
         case .portraitBlog:
             try preparePortraitBlogRepository(in: libraryStore)
+        case .journalPerformance:
+            try prepareJournalPerformanceRepository(in: libraryStore)
         case .readOnlyRepository:
             try prepareReadOnlyRepository(in: libraryStore)
         }
@@ -228,6 +231,42 @@ private enum UITestSeedScenario: String {
                 ],
                 updatedAt: happenedAt,
                 blogTags: ["Watching", "note"]
+            )
+        )
+        try libraryStore.savePreferences(AppPreferences())
+    }
+
+    private func prepareJournalPerformanceRepository(in libraryStore: RepositoryLibraryStore) throws {
+        let repositoryStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let baseDates = [
+            Self.fixtureDate("2026-04-15T09:00:00Z"),
+            Self.fixtureDate("2026-04-16T09:00:00Z"),
+            Self.fixtureDate("2026-04-17T09:00:00Z")
+        ]
+        var entries: [EntryRecord] = []
+
+        for date in baseDates {
+            for index in 1...12 {
+                entries.append(
+                    EntryRecord(
+                        id: UUID(),
+                        kind: .journal,
+                        title: "Performance Journal \(index)",
+                        body: "This seeded entry gives the Journal page enough rows to exercise page transition rendering.",
+                        happenedAt: date.addingTimeInterval(TimeInterval(index * 60)),
+                        createdAt: date.addingTimeInterval(TimeInterval(index * 60)),
+                        updatedAt: date.addingTimeInterval(TimeInterval(index * 60))
+                    )
+                )
+            }
+        }
+
+        let happenedAt = Self.fixtureDate("2026-04-16T09:00:00Z")
+        try repositoryStore.saveDescriptor(.local)
+        try repositoryStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: entries,
+                updatedAt: happenedAt
             )
         )
         try libraryStore.savePreferences(AppPreferences())

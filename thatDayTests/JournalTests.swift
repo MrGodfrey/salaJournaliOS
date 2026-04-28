@@ -133,6 +133,38 @@ final class JournalTests: AppStoreTestCase {
         XCTAssertEqual(Calendar.current.dayIdentifier(for: store.selectedDate), "2026-04-16")
     }
 
+    @MainActor
+    func testJournalEntriesForExplicitPageDateDoNotMutateSelectedDate() async throws {
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T09:00:00Z"),
+            entries: [
+                makeEntry(title: "Current Page", happenedAt: fixtureDate("2026-04-16T09:00:00Z")),
+                makeEntry(title: "Next Page", happenedAt: fixtureDate("2026-04-17T09:00:00Z")),
+                makeEntry(kind: .blog, title: "Ignored Blog", happenedAt: fixtureDate("2026-04-17T09:00:00Z"))
+            ]
+        )
+
+        await store.loadIfNeeded()
+
+        let nextPageEntries = store.journalEntries(for: fixtureDate("2026-04-17T09:00:00Z"))
+
+        XCTAssertEqual(nextPageEntries.map(\.title), ["Next Page"])
+        XCTAssertEqual(store.journalEntries.map(\.title), ["Current Page"])
+        XCTAssertEqual(Calendar.current.dayIdentifier(for: store.selectedDate), "2026-04-16")
+    }
+
+    @MainActor
+    func testJournalDateByAddingUsesCalendarDayBoundaries() async throws {
+        let store = try makeStore(now: fixtureDate("2026-04-30T09:00:00Z"))
+        await store.loadIfNeeded()
+
+        let nextDay = store.journalDate(byAdding: 1, to: fixtureDate("2026-04-30T09:00:00Z"))
+        let previousDay = store.journalDate(byAdding: -1, to: fixtureDate("2026-05-01T09:00:00Z"))
+
+        XCTAssertEqual(Calendar.current.dayIdentifier(for: nextDay), "2026-05-01")
+        XCTAssertEqual(Calendar.current.dayIdentifier(for: previousDay), "2026-04-30")
+    }
+
     func testSearchBarTextSynchronizationPreservesMarkedTextComposition() {
         XCTAssertFalse(SearchBarTextSynchronization.shouldCommitUIKitChange(hasMarkedText: true))
         XCTAssertFalse(

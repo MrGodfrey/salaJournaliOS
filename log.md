@@ -798,4 +798,34 @@
   - 删除不再使用的 `HorizontalSwipeDirection` 工具
 - 删除 Blog 滑动切换标签相关测试：
   - 移除 `testBlogTagHorizontalSwipeMovesAcrossFilterOptions`
-- `README.md` 已同步撤掉 Blog 列表滑动切换标签说明；Blog 标签切换继续通过顶部标签条完成
+- `README.md` 已同步撤掉 Blog 列表滑动切换标签说明，并收紧交互原则表述；Blog 标签切换继续通过顶部标签条完成
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `74/74` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.04.24_14-48-07-+0800.xcresult`
+
+## 2026-04-28 10:16
+
+- Journal 页面切日改为 `UIPageViewController` 系统分页：
+  - 内容区左滑进入后一天，右滑回到前一天，保留顶部 `Previous / Next` 按钮
+  - 每个日期页使用独立 SwiftUI hosted `List`，由 `UIPageViewController` 处理水平翻页手势、垂直滚动冲突和系统滚动转场
+  - 顶部按钮、日期选择和手势切换共用同一套按天翻页状态，快速切换时缓存待应用日期，避免动画中途状态错乱
+- `AppStore` 补充 Journal 分页需要的日期接口：
+  - 支持按显式日期读取 Journal entries，避免预加载前后页时改动当前选中日期
+  - 统一按日历日边界计算前一天 / 后一天
+- 测试与文档同步：
+  - `JournalTests` 新增显式页面日期读取和跨日日期计算用例
+  - `thatDayUITests` 新增 Journal `UIPageViewController` 左右滑动切日用例，以及 seeded 多条 Journal 的翻页性能用例
+  - `thatDayApp` 新增 `journal-performance` UI 测试 seed
+  - `README.md` 已更新：补充 Journal 内容区系统级左右翻页和性能测试覆盖
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-pageview-1 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/JournalTests/testJournalEntriesForExplicitPageDateDoNotMutateSelectedDate -only-testing:thatDayTests/JournalTests/testJournalDateByAddingUsesCalendarDayBoundaries`
+    - 定向单元测试 `2/2` 通过
+    - `xcresult`: `/tmp/thatDay-pageview-1/Logs/Test/Test-thatDay-2026.04.28_10-08-32-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-pageview-2 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testJournalSwipeSwitchesDatesWithPageViewController -only-testing:thatDayUITests/thatDayUITests/testJournalSwipeAnimationPerformance`
+    - 定向 UI 测试 `2/2` 通过
+    - 性能用例 `5` 次往返滑动平均 Clock `1.523s`、CPU `0.334s`、Memory Peak Physical 约 `61.3MB`
+    - `xcresult`: `/tmp/thatDay-pageview-2/Logs/Test/Test-thatDay-2026.04.28_10-12-13-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-pageview-3 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/JournalTests`
+    - `JournalTests` `21/21` 通过
+    - `xcresult`: `/tmp/thatDay-pageview-3/Logs/Test/Test-thatDay-2026.04.28_10-13-59-+0800.xcresult`

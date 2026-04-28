@@ -86,6 +86,55 @@ final class thatDayUITests: XCTestCase {
     }
 
     @MainActor
+    func testJournalSwipeSwitchesDatesWithPageViewController() throws {
+        let app = launchApp(tapAfterLaunch: false)
+
+        let headerButton = app.buttons["journalHeaderDateButton"]
+        let page = app.collectionViews.firstMatch
+        XCTAssertTrue(headerButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        XCTAssertEqual(headerButton.label, "April 16")
+
+        page.swipeLeft()
+        XCTAssertTrue(waitUntil(timeout: 3) { headerButton.label == "April 17" })
+
+        page.swipeRight()
+        XCTAssertTrue(waitUntil(timeout: 3) { headerButton.label == "April 16" })
+    }
+
+    @MainActor
+    func testJournalSwipeAnimationPerformance() throws {
+        let app = launchApp(seed: .journalPerformance, tapAfterLaunch: false)
+
+        let headerButton = app.buttons["journalHeaderDateButton"]
+        let page = app.collectionViews.firstMatch
+        XCTAssertTrue(headerButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        XCTAssertEqual(headerButton.label, "April 16")
+
+        var metrics: [XCTMetric] = [
+            XCTClockMetric(),
+            XCTCPUMetric(application: app),
+            XCTMemoryMetric(application: app),
+            XCTOSSignpostMetric.scrollingAndDecelerationMetric
+        ]
+        if #available(iOS 26.0, *) {
+            metrics.append(XCTHitchMetric(application: app))
+        }
+
+        let options = XCTMeasureOptions()
+        options.iterationCount = 5
+
+        measure(metrics: metrics, options: options) {
+            page.swipeLeft()
+            XCTAssertTrue(waitUntil(timeout: 3) { headerButton.label == "April 17" })
+
+            page.swipeRight()
+            XCTAssertTrue(waitUntil(timeout: 3) { headerButton.label == "April 16" })
+        }
+    }
+
+    @MainActor
     func testCreateJournalEntryWithoutTitle() throws {
         let app = launchApp()
 
@@ -434,7 +483,11 @@ final class thatDayUITests: XCTestCase {
         XCTAssertEqual(app.buttons["journalHeaderDateButton"].label, "4月16日")
     }
 
-    private func launchApp(seed: UITestSeedScenario? = nil, language: UITestLanguage = .english) -> XCUIApplication {
+    private func launchApp(
+        seed: UITestSeedScenario? = nil,
+        language: UITestLanguage = .english,
+        tapAfterLaunch: Bool = true
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["THATDAY_STORAGE_ROOT"] = "thatDay-ui-\(UUID().uuidString)"
         app.launchEnvironment["THATDAY_RESET_STORAGE"] = "1"
@@ -446,7 +499,9 @@ final class thatDayUITests: XCTestCase {
             app.launchEnvironment["THATDAY_UI_TEST_SEED"] = seed.rawValue
         }
         app.launch()
-        app.tap()
+        if tapAfterLaunch {
+            app.tap()
+        }
         dismissBlockingAlertIfPresent(in: app)
         return app
     }
@@ -551,6 +606,7 @@ final class thatDayUITests: XCTestCase {
 private enum UITestSeedScenario: String {
     case taggedBlog = "tagged-blog"
     case portraitBlog = "portrait-blog"
+    case journalPerformance = "journal-performance"
     case readOnlyRepository = "read-only-repository"
 }
 

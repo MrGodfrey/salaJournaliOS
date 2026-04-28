@@ -294,8 +294,12 @@ final class AppStore {
     }
 
     var journalEntries: [EntryRecord] {
+        journalEntries(for: selectedDate)
+    }
+
+    func journalEntries(for date: Date) -> [EntryRecord] {
         entries
-            .filter { $0.kind == .journal && calendar.isSameMonthDay($0.happenedAt, selectedDate) }
+            .filter { $0.kind == .journal && calendar.isSameMonthDay($0.happenedAt, date) }
             .sorted { lhs, rhs in
                 if lhs.happenedAt != rhs.happenedAt {
                     return lhs.happenedAt > rhs.happenedAt
@@ -414,6 +418,16 @@ final class AppStore {
     func selectDate(_ date: Date) {
         selectedDate = calendar.startOfDay(for: date)
         displayedMonth = calendar.startOfMonth(for: selectedDate)
+    }
+
+    func startOfJournalDay(for date: Date) -> Date {
+        calendar.startOfDay(for: date)
+    }
+
+    func journalDate(byAdding days: Int, to date: Date) -> Date {
+        let startOfDay = calendar.startOfDay(for: date)
+        let adjustedDate = calendar.date(byAdding: .day, value: days, to: startOfDay) ?? startOfDay
+        return calendar.startOfDay(for: adjustedDate)
     }
 
     func showEditor(for kind: EntryKind, entry: EntryRecord? = nil) {
