@@ -886,3 +886,21 @@
     - UI 测试 `32/32` 通过（常规 UI 测试 `24/24`，Launch tests `8/8`）
     - 单元测试 `78/78` 通过
     - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.05.09_09-28-05-+0800.xcresult`
+
+## 2026-05-09 11:18
+
+- 调整生物识别解锁的系统认证策略：
+  - 启用前仍先确认 Face ID / Touch ID 可用
+  - 实际解锁改用 `deviceOwnerAuthentication`，让系统在 Face ID / Touch ID 失败或被锁定后回退到锁屏密码
+  - 生物识别被锁定时不再直接失败，只要系统所有者认证可用就继续显示密码回退
+- 测试与文档同步：
+  - `BiometricTests` 新增系统认证策略测试，覆盖密码回退策略和生物识别锁定后的密码解锁路径
+  - `README.md` 已补充生物识别失败时可回退到系统锁屏密码
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-biometric-auth -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/BiometricTests`
+    - 生物识别定向单元测试 `6/6` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/XcodeBuildMCP/workspaces/thatDay-37eb3df99171/result-bundles/test_sim_2026-05-09T03-10-25-072Z_pid82371_3425e297.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-biometric-auth -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+    - 单元测试 `80/80` 通过
+    - UI 测试 `32/32` 通过（常规 UI 测试 `24/24`，Launch tests `8/8`）
+    - `xcresult`: `/Users/wangyu/Library/Developer/XcodeBuildMCP/workspaces/thatDay-37eb3df99171/result-bundles/test_sim_2026-05-09T03-11-16-070Z_pid82371_7677afb1.xcresult`

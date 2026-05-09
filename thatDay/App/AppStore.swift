@@ -81,6 +81,15 @@ enum SharedRepositoryRefreshTrigger: Sendable {
     case manual
 }
 
+protocol AppLocalAuthenticationContext: AnyObject {
+    var localizedFallbackTitle: String? { get set }
+
+    func canEvaluatePolicy(_ policy: LAPolicy, error: NSErrorPointer) -> Bool
+    func evaluatePolicy(_ policy: LAPolicy, localizedReason: String, reply: @escaping @Sendable (Bool, Error?) -> Void)
+}
+
+extension LAContext: AppLocalAuthenticationContext {}
+
 private enum RepositoryLoadBehavior: Equatable, Sendable {
     case localCacheOnly
     case blockingCloudFetchIfNoLocalSnapshot
@@ -1989,17 +1998,36 @@ final class AppStore {
         }
     }
 
-    private static func systemAuthenticateBiometrics(reason: String) async throws {
-        let context = LAContext()
+    static func systemAuthenticateBiometrics(reason: String) async throws {
+        try await systemAuthenticateBiometrics(reason: reason, context: LAContext())
+    }
+
+    static func systemAuthenticateBiometrics(reason: String, context: any AppLocalAuthenticationContext) async throws {
         context.localizedFallbackTitle = L10n.string("Use Passcode")
 
-        var evaluationError: NSError?
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &evaluationError) else {
-            throw evaluationError ?? LAError(.biometryNotAvailable)
+        var biometricEvaluationError: NSError?
+        let canEvaluateBiometrics = context.canEvaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            error: &biometricEvaluationError
+        )
+        if !canEvaluateBiometrics,
+           !isBiometryLockout(biometricEvaluationError) {
+            throw biometricEvaluationError ?? LAError(.biometryNotAvailable)
+        }
+
+        var ownerAuthenticationError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &ownerAuthenticationError) else {
+            if let ownerAuthenticationError {
+                throw ownerAuthenticationError
+            }
+            if let biometricEvaluationError {
+                throw biometricEvaluationError
+            }
+            throw LAError(.passcodeNotSet)
         }
 
         _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
-            context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, error in
                 if success {
                     continuation.resume(returning: true)
                 } else {
@@ -2007,6 +2035,14 @@ final class AppStore {
                 }
             }
         }
+    }
+
+    private static func isBiometryLockout(_ error: NSError?) -> Bool {
+        guard let error else {
+            return false
+        }
+
+        return LAError.Code(rawValue: error.code) == .biometryLockout
     }
 
     static func userFacingMessage(for error: Error) -> String {
