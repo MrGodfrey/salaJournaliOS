@@ -496,6 +496,7 @@ final class SharingTests: AppStoreTestCase {
 
         let cloudService = MockCloudRepositoryService()
         cloudService.loadedSnapshot = snapshot
+        cloudService.saveSnapshotStartedExpectation = expectation(description: "background cloud save started")
 
         let store = AppStore(
             libraryStore: libraryStore,
@@ -517,6 +518,9 @@ final class SharingTests: AppStoreTestCase {
         )
 
         XCTAssertTrue(didSave)
+        if let saveSnapshotStartedExpectation = cloudService.saveSnapshotStartedExpectation {
+            await fulfillment(of: [saveSnapshotStartedExpectation], timeout: 1.0)
+        }
         let uploadedSnapshot = try XCTUnwrap(cloudService.savedSnapshots.last)
         XCTAssertEqual(uploadedSnapshot.entries.first?.imageReference, imageReference)
         XCTAssertEqual(uploadedSnapshot.embeddedImages.map(\.reference), [imageReference])
@@ -1198,6 +1202,7 @@ final class SharingTests: AppStoreTestCase {
         cloudService.loadedSnapshot = initialSnapshot
         cloudService.pauseSaveSnapshot = true
         cloudService.saveSnapshotStartedExpectation = expectation(description: "cloud save paused")
+        cloudService.saveSnapshotFinishedExpectation = expectation(description: "cloud save finished")
 
         let store = AppStore(
             libraryStore: libraryStore,
@@ -1206,8 +1211,9 @@ final class SharingTests: AppStoreTestCase {
         )
         await store.loadIfNeeded()
 
+        let localSaveFinished = expectation(description: "local save finished before cloud upload")
         let saveTask = Task {
-            await store.saveEntry(
+            let didSave = await store.saveEntry(
                 draft: EntryDraft(
                     kind: .journal,
                     title: "Fresh Shared Journal",
@@ -1216,7 +1222,13 @@ final class SharingTests: AppStoreTestCase {
                 ),
                 importedImageData: nil
             )
+            localSaveFinished.fulfill()
+            return didSave
         }
+
+        await fulfillment(of: [localSaveFinished], timeout: 1.0)
+        let didSave = await saveTask.value
+        XCTAssertTrue(didSave)
 
         if let saveSnapshotStartedExpectation = cloudService.saveSnapshotStartedExpectation {
             await fulfillment(of: [saveSnapshotStartedExpectation], timeout: 1.0)
@@ -1236,9 +1248,10 @@ final class SharingTests: AppStoreTestCase {
         )
 
         cloudService.resumePausedSaveSnapshot()
+        if let saveSnapshotFinishedExpectation = cloudService.saveSnapshotFinishedExpectation {
+            await fulfillment(of: [saveSnapshotFinishedExpectation], timeout: 1.0)
+        }
 
-        let didSave = await saveTask.value
-        XCTAssertTrue(didSave)
         XCTAssertEqual(
             store.journalEntries.map(\.title),
             ["Fresh Shared Journal", "Earlier Shared Journal"]

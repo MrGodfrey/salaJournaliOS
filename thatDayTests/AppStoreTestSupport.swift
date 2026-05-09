@@ -147,6 +147,7 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     var acceptedShareURLs: [URL] = []
     var acceptedShareMetadataCount = 0
     var saveSnapshotStartedExpectation: XCTestExpectation?
+    var saveSnapshotFinishedExpectation: XCTestExpectation?
     var pauseSaveSnapshot = false
 
     private var saveSnapshotContinuation: CheckedContinuation<Void, Never>?
@@ -195,6 +196,7 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         }
 
         if descriptor.role == .local {
+            saveSnapshotFinishedExpectation?.fulfill()
             return RepositoryDescriptor(
                 zoneName: "mock-zone",
                 zoneOwnerName: CKCurrentUserDefaultName,
@@ -203,6 +205,7 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
             )
         }
 
+        saveSnapshotFinishedExpectation?.fulfill()
         return descriptor
     }
 

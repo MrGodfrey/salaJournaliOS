@@ -860,3 +860,29 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-blog-pageview-4 -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayUITests/thatDayUITests/testBlogTagSwipeSwitchesFiltersWithPageViewController`
     - 本地化 accessibility 文案接入后复跑 UI 滑动用例 `1/1` 通过
     - `xcresult`: `/tmp/thatDay-blog-pageview-4/Logs/Test/Test-thatDay-2026.04.28_12-00-51-+0800.xcresult`
+
+## 2026-05-09 09:26
+
+- 调整共享仓库保存链路为本地优先：
+  - `Save` 只等待本地 `repository.json`、`descriptor.json` 和 catalog 落盘，不再同步等待 CloudKit 上传完成
+  - CloudKit 上传改为 `AppStore` 内部仓库级后台队列执行
+  - 同一仓库连续保存会合并待上传的最新本地快照，并串行执行上传，避免旧快照并发覆盖新快照
+  - 后台上传期间继续保留 mutation in-flight 状态，前台 / 推送刷新不会用旧远端快照覆盖刚写入的本地内容
+- 测试与文档同步：
+  - `SharingTests` 更新共享保存用例，覆盖本地保存先完成、云端上传暂停时保存仍返回，以及后台上传仍携带图片资产
+  - `README.md` 已同步说明 `Save` 本地优先和 CloudKit 后台上传行为
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests/SharingTests/testSavingSharedRepositoryUploadsEmbeddedImagesToCloud -only-testing:thatDayTests/SharingTests/testRefreshingSharedRepositoryDuringSaveKeepsNewJournalEntryVisibleAndPersisted`
+    - 定向共享保存测试 `2/2` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.05.09_09-25-02-+0800.xcresult`
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO -only-testing:thatDayTests`
+    - 单元测试 `78/78` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.05.09_09-26-45-+0800.xcresult`
+
+## 2026-05-09 09:34
+
+- 按交付要求执行完整测试并准备提交推送：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=989812C6-88E2-4DFD-B4B4-457AD4CF7324' -parallel-testing-enabled NO`
+    - UI 测试 `32/32` 通过（常规 UI 测试 `24/24`，Launch tests `8/8`）
+    - 单元测试 `78/78` 通过
+    - `xcresult`: `/Users/wangyu/Library/Developer/Xcode/DerivedData/thatDay-gigtydgyvcksabgwinwrbzgkcfvs/Logs/Test/Test-thatDay-2026.05.09_09-28-05-+0800.xcresult`

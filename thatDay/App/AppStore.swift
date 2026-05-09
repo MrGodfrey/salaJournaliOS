@@ -86,6 +86,12 @@ private enum RepositoryLoadBehavior: Equatable, Sendable {
     case blockingCloudFetchIfNoLocalSnapshot
 }
 
+private struct PendingRepositoryCloudSync {
+    var descriptor: RepositoryDescriptor
+    var displayName: String
+    var mutationCount: Int
+}
+
 @MainActor
 @Observable
 final class AppStore {
@@ -113,6 +119,8 @@ final class AppStore {
     private var repositoryMutationGenerations: [String: Int] = [:]
     private var repositoryMutationInFlightCounts: [String: Int] = [:]
     private var repositoriesPendingRefreshAfterMutation: Set<String> = []
+    private var pendingRepositoryCloudSyncs: [String: PendingRepositoryCloudSync] = [:]
+    private var repositoryCloudSyncTasks: [String: Task<Void, Never>] = [:]
 
     var selectedTab: AppTab = .journal
     var selectedDate: Date
@@ -1437,8 +1445,6 @@ final class AppStore {
 
         beginRepositoryMutation(for: repositoryID)
 
-        var storedError: Error?
-
         do {
             normalizeRepositoryState()
             let snapshot = RepositorySnapshot(
@@ -1449,21 +1455,96 @@ final class AppStore {
             )
             try repositoryStore.saveSnapshot(snapshot)
 
-            let savedDescriptor: RepositoryDescriptor
             if descriptorAtStart.role != .local {
-                let cloudSnapshot = try repositoryStore.makeSnapshot(
-                    entries: entries,
-                    updatedAt: snapshot.updatedAt,
-                    embeddingImages: true,
-                    blogTags: blogTags,
-                    sharedUpdateNotificationScope: repositorySharedUpdateNotificationScope
-                )
-                savedDescriptor = try await cloudService.saveSnapshot(cloudSnapshot, using: descriptorAtStart)
-                try repositoryStore.saveDescriptor(savedDescriptor)
+                try repositoryStore.saveDescriptor(descriptorAtStart)
             } else {
-                savedDescriptor = .local
-                try repositoryStore.saveDescriptor(savedDescriptor)
+                try repositoryStore.saveDescriptor(.local)
             }
+
+            if currentRepositoryID == repositoryID {
+                repositoryDescriptor = descriptorAtStart.role == .local ? .local : descriptorAtStart
+            }
+
+            upsertRepositoryReference(
+                repositoryID: repositoryID,
+                descriptor: descriptorAtStart.role == .local ? .local : descriptorAtStart,
+                displayName: repositoryName,
+                snapshotUpdatedAt: snapshot.updatedAt,
+                markAsOpened: true
+            )
+            try persistRepositoryCatalog()
+
+            if descriptorAtStart.role != .local {
+                scheduleCloudSync(
+                    repositoryID: repositoryID,
+                    descriptor: descriptorAtStart,
+                    displayName: repositoryName
+                )
+            } else {
+                await finishRepositoryMutations(for: repositoryID, count: 1)
+            }
+        } catch {
+            await finishRepositoryMutations(for: repositoryID, count: 1)
+            throw error
+        }
+    }
+
+    private func scheduleCloudSync(
+        repositoryID: String,
+        descriptor: RepositoryDescriptor,
+        displayName: String
+    ) {
+        if var pendingSync = pendingRepositoryCloudSyncs[repositoryID] {
+            pendingSync.descriptor = descriptor
+            pendingSync.displayName = displayName
+            pendingSync.mutationCount += 1
+            pendingRepositoryCloudSyncs[repositoryID] = pendingSync
+        } else {
+            pendingRepositoryCloudSyncs[repositoryID] = PendingRepositoryCloudSync(
+                descriptor: descriptor,
+                displayName: displayName,
+                mutationCount: 1
+            )
+        }
+
+        guard repositoryCloudSyncTasks[repositoryID] == nil else {
+            return
+        }
+
+        repositoryCloudSyncTasks[repositoryID] = Task { [weak self] in
+            await self?.runPendingCloudSyncs(for: repositoryID)
+        }
+    }
+
+    private func runPendingCloudSyncs(for repositoryID: String) async {
+        while let pendingSync = pendingRepositoryCloudSyncs.removeValue(forKey: repositoryID) {
+            await uploadPendingCloudSync(pendingSync, repositoryID: repositoryID)
+            await finishRepositoryMutations(for: repositoryID, count: pendingSync.mutationCount)
+        }
+
+        repositoryCloudSyncTasks[repositoryID] = nil
+    }
+
+    private func uploadPendingCloudSync(
+        _ pendingSync: PendingRepositoryCloudSync,
+        repositoryID: String
+    ) async {
+        let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
+
+        do {
+            guard let localSnapshot = try repositoryStore.loadSnapshot() else {
+                return
+            }
+
+            let cloudSnapshot = try repositoryStore.makeSnapshot(
+                entries: localSnapshot.entries,
+                updatedAt: localSnapshot.updatedAt,
+                embeddingImages: true,
+                blogTags: localSnapshot.blogTags,
+                sharedUpdateNotificationScope: localSnapshot.sharedUpdateNotificationScope
+            )
+            let savedDescriptor = try await cloudService.saveSnapshot(cloudSnapshot, using: pendingSync.descriptor)
+            try repositoryStore.saveDescriptor(savedDescriptor)
 
             if currentRepositoryID == repositoryID {
                 repositoryDescriptor = savedDescriptor
@@ -1472,18 +1553,26 @@ final class AppStore {
             upsertRepositoryReference(
                 repositoryID: repositoryID,
                 descriptor: savedDescriptor,
-                displayName: repositoryName,
-                snapshotUpdatedAt: snapshot.updatedAt,
+                displayName: pendingSync.displayName,
+                snapshotUpdatedAt: cloudSnapshot.updatedAt,
                 markAsOpened: true
             )
             try persistRepositoryCatalog()
             await ensureRepositorySubscriptions()
         } catch {
             _ = recordSharedCloudThrottleIfNeeded(for: error)
-            storedError = error
+        }
+    }
+
+    private func finishRepositoryMutations(for repositoryID: String, count: Int) async {
+        var deferredRefreshReference: RepositoryReference?
+
+        for _ in 0..<count {
+            if let reference = finishRepositoryMutation(for: repositoryID) {
+                deferredRefreshReference = reference
+            }
         }
 
-        let deferredRefreshReference = finishRepositoryMutation(for: repositoryID)
         if let deferredRefreshReference,
            activeSharedCloudThrottleUntil() == nil {
             do {
@@ -1491,10 +1580,6 @@ final class AppStore {
             } catch {
                 _ = recordSharedCloudThrottleIfNeeded(for: error)
             }
-        }
-
-        if let storedError {
-            throw storedError
         }
     }
 
