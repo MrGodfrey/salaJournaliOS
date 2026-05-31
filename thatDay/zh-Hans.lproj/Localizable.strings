@@ -56,6 +56,7 @@
 "Enable biometric lock" = "启用生物识别锁";
 "Enter a tag name." = "请输入标签名。";
 "Enter a title." = "请输入标题。";
+"Enter a title or content." = "请输入标题或内容。";
 "Enter content." = "请输入内容。";
 "Enter a valid iCloud share link." = "请输入有效的 iCloud 共享链接。";
 "Everyone in this repository can use their own personal Push Updates setting again." = "此仓库中的所有成员都可以再次使用各自的个人推送更新设置。";

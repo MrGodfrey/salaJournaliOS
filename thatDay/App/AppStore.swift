@@ -503,12 +503,8 @@ final class AppStore {
         }
 
         let normalized = draft.normalized
-        guard normalized.kind == .journal || !normalized.title.isEmpty else {
-            alertMessage = L10n.string("Enter a title.")
-            return false
-        }
-        guard !normalized.body.isEmpty else {
-            alertMessage = L10n.string("Enter content.")
+        guard !normalized.title.isEmpty || !normalized.body.isEmpty else {
+            alertMessage = L10n.string("Enter a title or content.")
             return false
         }
 

@@ -258,6 +258,41 @@ final class JournalTests: AppStoreTestCase {
     }
 
     @MainActor
+    func testSavingJournalEntryAllowsTitleOnlyAndRejectsBlankDraft() async throws {
+        let store = try makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
+
+        await store.loadIfNeeded()
+
+        let didSaveTitleOnly = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: "Title only journal",
+                body: "   ",
+                happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+            ),
+            importedImageData: nil
+        )
+
+        XCTAssertTrue(didSaveTitleOnly)
+        XCTAssertEqual(store.journalEntries.first?.title, "Title only journal")
+        XCTAssertEqual(store.journalEntries.first?.body, "")
+
+        let didSaveBlankDraft = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: "   ",
+                body: "\n\t",
+                happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+            ),
+            importedImageData: nil
+        )
+
+        XCTAssertFalse(didSaveBlankDraft)
+        XCTAssertEqual(store.alertMessage, "Enter a title or content.")
+        XCTAssertEqual(store.journalEntries.count, 1)
+    }
+
+    @MainActor
     func testBlogEntriesDefaultToNoteTagAndWrittenStatisticsCountAllEntries() async throws {
         let entries = [
             makeEntry(

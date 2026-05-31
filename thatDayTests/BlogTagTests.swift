@@ -39,6 +39,54 @@ final class BlogTagTests: AppStoreTestCase {
     }
 
     @MainActor
+    func testSavingBlogEntryAllowsTitleOnlyContentOnlyAndRejectsBlankDraft() async throws {
+        let store = try makeStore(now: fixtureDate("2026-04-16T09:00:00Z"))
+
+        await store.loadIfNeeded()
+
+        let didSaveTitleOnly = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .blog,
+                title: "Title only blog",
+                body: "   ",
+                happenedAt: fixtureDate("2026-04-16T09:00:00Z")
+            ),
+            importedImageData: nil
+        )
+
+        XCTAssertTrue(didSaveTitleOnly)
+
+        let didSaveContentOnly = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .blog,
+                title: "   ",
+                body: "Content only blog.",
+                happenedAt: fixtureDate("2026-04-17T09:00:00Z")
+            ),
+            importedImageData: nil
+        )
+
+        XCTAssertTrue(didSaveContentOnly)
+        XCTAssertEqual(store.blogEntries.count, 2)
+        XCTAssertTrue(store.blogEntries.contains(where: { $0.title == "Title only blog" && $0.body == "" }))
+        XCTAssertTrue(store.blogEntries.contains(where: { $0.title == "" && $0.body == "Content only blog." }))
+
+        let didSaveBlankDraft = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .blog,
+                title: "   ",
+                body: "\n\t",
+                happenedAt: fixtureDate("2026-04-18T09:00:00Z")
+            ),
+            importedImageData: nil
+        )
+
+        XCTAssertFalse(didSaveBlankDraft)
+        XCTAssertEqual(store.alertMessage, "Enter a title or content.")
+        XCTAssertEqual(store.blogEntries.count, 2)
+    }
+
+    @MainActor
     func testSavingBlogEntryPersistsSelectedImageLayout() async throws {
         let storageRoot = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)

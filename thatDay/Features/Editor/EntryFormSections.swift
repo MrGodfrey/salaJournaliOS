@@ -68,7 +68,7 @@ struct EntryFormSections: View {
     }
 
     private var titlePlaceholder: String {
-        draft.kind == .journal ? L10n.string("Title (Optional)") : L10n.string("Title")
+        L10n.string("Title (Optional)")
     }
 
     private var hasImagePreview: Bool {

@@ -904,3 +904,22 @@
     - 单元测试 `80/80` 通过
     - UI 测试 `32/32` 通过（常规 UI 测试 `24/24`，Launch tests `8/8`）
     - `xcresult`: `/Users/wangyu/Library/Developer/XcodeBuildMCP/workspaces/thatDay-37eb3df99171/result-bundles/test_sim_2026-05-09T03-11-16-070Z_pid82371_7677afb1.xcresult`
+
+## 2026-05-31 21:12
+
+- 调整 Journal / Blog 保存校验：
+  - 标题和正文只要有一项非空即可保存
+  - 标题和正文归一化后同时为空时阻止保存，并提示 `Enter a title or content.`
+  - Blog 编辑页标题占位文案同步改为可选
+- 测试与文档同步：
+  - `JournalTests` 补充只写标题可保存、标题正文同时为空不可保存的用例
+  - `BlogTagTests` 补充只写标题、只写正文可保存，以及标题正文同时为空不可保存的用例
+  - `README.md` 已同步说明 Journal / Blog 标题和正文至少填写一项
+- 验证记录：
+  - `plutil -lint thatDay/zh-Hans.lproj/Localizable.strings`
+    - 本地化文件语法通过
+  - `git diff --check`
+    - 通过
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-entry-validation -destination 'platform=iOS Simulator,name=iPhone 16' -parallel-testing-enabled NO -only-testing:thatDayTests/JournalTests/testSavingJournalEntryAllowsEmptyTitle -only-testing:thatDayTests/JournalTests/testSavingJournalEntryAllowsTitleOnlyAndRejectsBlankDraft -only-testing:thatDayTests/BlogTagTests/testSavingBlogEntryAllowsTitleOnlyContentOnlyAndRejectsBlankDraft`
+    - 未能执行：当前机器没有可用 iOS Simulator device / runtime，`xcrun simctl list devices` 和 `xcrun simctl runtime list --json` 均为空
+    - `xcodebuild` 返回：`Unable to find a device matching the provided destination specifier`
