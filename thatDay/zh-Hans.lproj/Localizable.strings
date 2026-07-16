@@ -18,6 +18,7 @@
 "B" = "十亿";
 "Biometric lock is enabled" = "已启用生物识别锁";
 "Biometric Unlock" = "生物识别解锁";
+"Beijing Time" = "北京时间";
 "Blog" = "博客";
 "Blog Tags" = "博客标签";
 "Blog updates" = "博客更新";
@@ -41,6 +42,8 @@
 "Current Access" = "当前权限";
 "Current Repository" = "当前仓库";
 "Date" = "日期";
+"Date & Time" = "日期与时间";
+"Dates and day grouping use this time zone. Saved timestamps remain in the standard UTC-based format." = "日期显示和按天分组使用此时区；保存的时间戳仍使用基于 UTC 的标准格式。";
 "Default on Launch" = "启动默认打开";
 "Delete" = "删除";
 "Delete %@?" = "删除 %@？";
@@ -123,6 +126,7 @@
 "Shared Repository · %@" = "共享仓库 · %@";
 "Shared Repository Update Alerts" = "共享仓库更新提醒";
 "Start typing to search" = "开始输入以搜索";
+"System Default" = "跟随系统";
 "T" = "万亿";
 "Tags" = "标签";
 "Tags belong to the current repository. Drag a tag to reorder it, add new ones here, and deleting a used tag will first ask where its blog posts should move." = "标签属于当前仓库。你可以拖动调整顺序、在这里新增标签，删除已使用标签前会先要求选择文章迁移去向。";
@@ -152,6 +156,7 @@
 "This repository is locked to %@ for every member. Personal Push Updates preferences are ignored here until you switch back to All." = "这个仓库已对所有成员锁定为 %@；在你切回 All 之前，这里的个人 Push Updates 偏好都会被忽略。";
 "This tag is not used by any blog posts and will be removed from the current repository." = "这个标签当前没有被任何博客文章使用，将从当前仓库移除。";
 "this tag" = "该标签";
+"Time Zone" = "时区";
 "Title" = "标题";
 "Title (Optional)" = "标题（可选）";
 "Today" = "今天";

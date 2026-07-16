@@ -19,60 +19,68 @@ enum AppLanguage {
         calendar.monthSymbols
     }
 
-    static func monthDayTitle(for date: Date) -> String {
-        format(date, template: "MMMMd")
+    static func monthDayTitle(for date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        format(date, template: "MMMMd", timeZone: timeZone)
     }
 
-    static func monthTitle(for date: Date) -> String {
-        format(date, template: "MMMM")
+    static func monthTitle(for date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        format(date, template: "MMMM", timeZone: timeZone)
     }
 
-    static func monthYearTitle(for date: Date) -> String {
-        format(date, template: "yMMMM")
+    static func monthYearTitle(for date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        format(date, template: "yMMMM", timeZone: timeZone)
     }
 
-    static func weekdayTitle(for date: Date) -> String {
-        format(date, template: "EEEE")
+    static func weekdayTitle(for date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        format(date, template: "EEEE", timeZone: timeZone)
     }
 
-    static func timelineTitle(for date: Date) -> String {
-        format(date, template: "yMMMMd")
+    static func timelineTitle(for date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        format(date, template: "yMMMMd", timeZone: timeZone)
     }
 
-    static func cardDateTitle(for date: Date) -> String {
+    static func cardDateTitle(for date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> String {
         if prefersChineseDateFormats {
-            return format(date, pattern: "yyyy年M月d日 EEEE")
+            return format(date, pattern: "yyyy年M月d日 EEEE", timeZone: timeZone)
         }
 
-        return format(date, pattern: "EEEE, M/d/yyyy")
+        return format(date, pattern: "EEEE, M/d/yyyy", timeZone: timeZone)
     }
 
-    static func journalCardDateTitle(for date: Date) -> String {
+    static func journalCardDateTitle(for date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> String {
         if prefersChineseDateFormats {
-            return format(date, pattern: "yyyy年 EEEE")
+            return format(date, pattern: "yyyy年 EEEE", timeZone: timeZone)
         }
 
-        return format(date, pattern: "EEEE, yyyy")
+        return format(date, pattern: "EEEE, yyyy", timeZone: timeZone)
     }
 
-    static func yearTitle(for date: Date) -> String {
-        format(date, template: "y")
+    static func yearTitle(for date: Date, timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        format(date, template: "y", timeZone: timeZone)
     }
 
-    private static func format(_ date: Date, template: String) -> String {
+    private static func format(_ date: Date, template: String, timeZone: TimeZone) -> String {
         let formatter = DateFormatter()
         formatter.locale = locale
-        formatter.calendar = calendar
+        formatter.calendar = calendar(in: timeZone)
+        formatter.timeZone = timeZone
         formatter.setLocalizedDateFormatFromTemplate(template)
         return formatter.string(from: date)
     }
 
-    private static func format(_ date: Date, pattern: String) -> String {
+    private static func format(_ date: Date, pattern: String, timeZone: TimeZone) -> String {
         let formatter = DateFormatter()
         formatter.locale = locale
-        formatter.calendar = calendar
+        formatter.calendar = calendar(in: timeZone)
+        formatter.timeZone = timeZone
         formatter.dateFormat = pattern
         return formatter.string(from: date)
+    }
+
+    private static func calendar(in timeZone: TimeZone) -> Calendar {
+        var configuredCalendar = calendar
+        configuredCalendar.timeZone = timeZone
+        return configuredCalendar
     }
 
     private static var prefersChineseDateFormats: Bool {

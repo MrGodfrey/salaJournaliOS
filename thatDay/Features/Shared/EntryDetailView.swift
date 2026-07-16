@@ -137,7 +137,7 @@ struct EntryDetailView: View {
                         }
 
                         HStack(spacing: 8) {
-                            Text(entry.timelineTitle)
+                            Text(store.timelineTitle(for: entry))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
 

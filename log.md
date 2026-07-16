@@ -923,3 +923,40 @@
   - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-entry-validation -destination 'platform=iOS Simulator,name=iPhone 16' -parallel-testing-enabled NO -only-testing:thatDayTests/JournalTests/testSavingJournalEntryAllowsEmptyTitle -only-testing:thatDayTests/JournalTests/testSavingJournalEntryAllowsTitleOnlyAndRejectsBlankDraft -only-testing:thatDayTests/BlogTagTests/testSavingBlogEntryAllowsTitleOnlyContentOnlyAndRejectsBlankDraft`
     - 未能执行：当前机器没有可用 iOS Simulator device / runtime，`xcrun simctl list devices` 和 `xcrun simctl runtime list --json` 均为空
     - `xcodebuild` 返回：`Unable to find a device matching the provided destination specifier`
+
+## 2026-07-16 23:53
+
+- 新增应用时区设置：
+  - 设置页底部增加“日期与时间 / 时区”，可选择“跟随系统”或“北京时间”
+  - 默认跟随系统；选择结果写入 `preferences.json` 并在后续启动时保持
+  - 跟随系统时会响应系统时区变更；切换时区后，Calendar、Journal、Blog、Search、详情页及日期选择器统一使用所选时区
+- 明确时间语义：
+  - 条目的发生、创建和更新时间仍以绝对 `Date` 保存，本地 JSON / 归档使用 ISO 8601 UTC 格式
+  - 所选应用时区只决定绝对时间显示成哪个本地日期，以及 Journal / Calendar 的按日归组，不改写已保存的时间点
+- 测试与文档同步：
+  - `JournalTests` 增加 UTC 日期边界在北京时间下跨日、时区切换和偏好持久化测试
+  - `StorageTests` 增加 UTC ISO 8601 写盘格式测试，并确认旧偏好文件默认跟随系统
+  - `README.md` 已补充时间存储、日期归属和时区选项说明
+- 验证记录：
+  - `plutil -lint thatDay/zh-Hans.lproj/Localizable.strings`：通过
+  - `git diff --check`：通过
+  - `xcodebuild build-for-testing -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath /tmp/thatDay-timezone-tests-build CODE_SIGNING_ALLOWED=NO EXCLUDED_SOURCE_FILE_NAMES=Assets.xcassets`：生产、单元测试和 UI 测试目标均编译通过
+  - 本机 CoreSimulator 补丁版本与 Xcode 不匹配，且 Mac 测试运行器在启动前退出，因此本轮未能实际运行测试用例；结果包：`/tmp/thatDay-timezone-mac-tests-signed/Logs/Test/Test-thatDay-2026.07.16_23-49-42-+0100.xcresult`
+
+## 2026-07-17 00:01
+
+- 修复并验证模拟器测试环境：
+  - 使用当前 Xcode 26.6 重新连接用户级 CoreSimulator 服务，确认 iOS 26.5 runtime 和 iPhone 17 Pro 模拟器可用
+  - 完整模拟器测试成功运行，不再出现先前的 CoreSimulator 补丁版本阻塞
+- 发布准备：
+  - 应用 Marketing Version 从 `1.2.7` 更新为 `1.2.8`
+  - 版本 `1.2.8` 包含可持久化的“跟随系统 / 北京时间”应用时区设置，以及统一的日期显示和按日归组语义
+- 验证记录：
+  - `xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -derivedDataPath /tmp/thatDay-timezone-full-tests -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -parallel-testing-enabled NO`
+    - 单元测试 `84/84` 通过
+    - 常规 UI 测试 `24/24` 通过
+    - Launch tests `8/8` 通过
+    - 合计 `116/116` 通过，零失败
+    - `xcresult`: `/tmp/thatDay-timezone-full-tests/Logs/Test/Test-thatDay-2026.07.16_23-54-46-+0100.xcresult`
+  - `plutil -lint thatDay/zh-Hans.lproj/Localizable.strings`：通过
+  - `git diff --check`：通过

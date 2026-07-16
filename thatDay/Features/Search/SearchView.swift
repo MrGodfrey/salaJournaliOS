@@ -26,7 +26,8 @@ struct SearchView: View {
                                     EntryCardView(
                                         entry: entry,
                                         imageURL: store.imageURL(for: entry),
-                                        imageRefreshVersion: store.imageRefreshVersion
+                                        imageRefreshVersion: store.imageRefreshVersion,
+                                        dateText: store.cardDateTitle(for: entry)
                                     )
                                 }
                                 .navigationLinkIndicatorVisibility(.hidden)

@@ -32,6 +32,49 @@ final class JournalTests: AppStoreTestCase {
     }
 
     @MainActor
+    func testBeijingTimeZoneControlsTodayGroupingFormattingAndPersistsSelection() async throws {
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.locale = Locale(identifier: "en_US")
+        utcCalendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+
+        let lateEntry = makeEntry(
+            title: "Beijing April 17",
+            happenedAt: fixtureDate("2025-04-16T16:30:00Z")
+        )
+        let earlyEntry = makeEntry(
+            title: "Beijing April 16",
+            happenedAt: fixtureDate("2025-04-16T15:30:00Z")
+        )
+        let storageRoot = makeTempDirectory()
+        let store = try makeStore(
+            now: fixtureDate("2026-04-16T17:30:00Z"),
+            entries: [lateEntry, earlyEntry],
+            rootURL: storageRoot,
+            preferences: AppPreferences(appTimeZone: .beijing),
+            calendar: utcCalendar
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.appTimeZone, .beijing)
+        XCTAssertEqual(store.timeZone.identifier, "Asia/Shanghai")
+        XCTAssertEqual(store.calendar.dayIdentifier(for: store.selectedDate), "2026-04-17")
+        XCTAssertEqual(store.journalEntries.map(\.title), ["Beijing April 17"])
+        XCTAssertEqual(store.journalCardDateTitle(for: lateEntry), "Thursday, 2025")
+
+        store.setAppTimeZone(.system)
+
+        XCTAssertEqual(store.timeZone.secondsFromGMT(), 0)
+        XCTAssertEqual(store.calendar.dayIdentifier(for: store.selectedDate), "2026-04-17")
+        XCTAssertTrue(store.journalEntries.isEmpty)
+        XCTAssertEqual(store.journalCardDateTitle(for: lateEntry), "Wednesday, 2025")
+        XCTAssertEqual(
+            try RepositoryLibraryStore(rootURL: storageRoot).loadPreferences().appTimeZone,
+            .system
+        )
+    }
+
+    @MainActor
     func testEmptySearchDoesNotShowAnyResults() async throws {
         let store = try makeStore(
             now: fixtureDate("2026-04-16T09:00:00Z"),

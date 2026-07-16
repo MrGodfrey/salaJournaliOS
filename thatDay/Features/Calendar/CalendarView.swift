@@ -17,7 +17,9 @@ struct CalendarView: View {
     private let weekdaySymbols = AppLanguage.shortStandaloneWeekdaySymbols
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
     private let statisticsColumns = Array(repeating: GridItem(.flexible(), spacing: 16), count: 3)
-    private let calendar = AppLanguage.calendar
+    private var calendar: Calendar {
+        store.calendar
+    }
 
     private var displayedYear: Int {
         calendar.component(.year, from: store.displayedMonth)
@@ -28,7 +30,7 @@ struct CalendarView: View {
     }
 
     private var displayedMonthTitle: String {
-        AppLanguage.monthYearTitle(for: store.displayedMonth)
+        store.monthYearTitle(for: store.displayedMonth)
     }
 
     private var yearRange: [Int] {
@@ -58,7 +60,8 @@ struct CalendarView: View {
         let days = CalendarGridBuilder.makeMonthGrid(
             displayedMonth: store.displayedMonth,
             selectedDate: store.selectedDate,
-            journalDates: store.journalDates
+            journalDates: store.journalDates,
+            calendar: calendar
         )
 
         NavigationStack {

@@ -23,6 +23,20 @@ final class StorageTests: AppStoreTestCase {
         XCTAssertEqual(preferences.defaultRepositoryID, RepositoryReference.localRepositoryID)
         XCTAssertTrue(preferences.isSharedUpdateNotificationEnabled)
         XCTAssertEqual(preferences.sharedUpdateNotificationScope, .all)
+        XCTAssertEqual(preferences.appTimeZone, .system)
+    }
+
+    func testRepositoryStoresEntryDatesAsUTCISO8601Instants() throws {
+        let rootURL = makeTempDirectory()
+        let store = LocalRepositoryStore(rootURL: rootURL)
+        let happenedAt = fixtureDate("2026-04-16T09:00:00Z")
+        let entry = makeEntry(title: "UTC Entry", happenedAt: happenedAt)
+
+        try store.saveSnapshot(RepositorySnapshot(entries: [entry], updatedAt: happenedAt))
+
+        let savedJSON = try String(contentsOf: store.archiveURL, encoding: .utf8)
+        XCTAssertTrue(savedJSON.contains("\"happenedAt\" : \"2026-04-16T09:00:00Z\""))
+        XCTAssertEqual(try XCTUnwrap(store.loadSnapshot()).entries.first?.happenedAt, happenedAt)
     }
 
     func testLoadSnapshotDefaultsRepositoryNotificationScopeForLegacySnapshotFile() throws {

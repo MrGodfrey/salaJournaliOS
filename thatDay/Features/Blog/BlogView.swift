@@ -417,7 +417,8 @@ private struct BlogTagPageView: View {
                         EntryCardView(
                             entry: entry,
                             imageURL: store.imageURL(for: entry),
-                            imageRefreshVersion: store.imageRefreshVersion
+                            imageRefreshVersion: store.imageRefreshVersion,
+                            dateText: store.cardDateTitle(for: entry)
                         )
                     }
                     .buttonStyle(.plain)

@@ -424,7 +424,7 @@ private struct JournalDayPageView: View {
                             entry: entry,
                             imageURL: store.imageURL(for: entry),
                             imageRefreshVersion: store.imageRefreshVersion,
-                            dateText: entry.journalCardDateTitle
+                            dateText: store.journalCardDateTitle(for: entry)
                         )
                     }
                     .buttonStyle(.plain)
@@ -438,7 +438,7 @@ private struct JournalDayPageView: View {
         .scrollContentBackground(.hidden)
         .background(Color(.systemGroupedBackground))
         .contentShape(Rectangle())
-        .accessibilityIdentifier("journalDayPage-\(Calendar.current.dayIdentifier(for: date))")
+        .accessibilityIdentifier("journalDayPage-\(store.calendar.dayIdentifier(for: date))")
         .refreshable {
             await refreshAction()
         }

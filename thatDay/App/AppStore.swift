@@ -112,7 +112,8 @@ final class AppStore {
     private let now: () -> Date
     private let authenticateBiometricsAction: (String) async throws -> Void
     private let setApplicationBadgeCount: (Int) -> Void
-    private let calendar: Calendar
+    private let baseCalendar: Calendar
+    private var systemTimeZone: TimeZone
 
     private var didLoad = false
     private var hasLoadedPreferences = false
@@ -160,7 +161,7 @@ final class AppStore {
     init(
         libraryStore: RepositoryLibraryStore,
         cloudService: any CloudRepositoryServicing,
-        calendar: Calendar = .current,
+        calendar: Calendar = .autoupdatingCurrent,
         now: @escaping () -> Date = Date.init,
         authenticateBiometrics: @escaping (String) async throws -> Void = AppStore.systemAuthenticateBiometrics,
         setApplicationBadgeCount: @escaping (Int) -> Void = { badgeCount in
@@ -169,7 +170,8 @@ final class AppStore {
     ) {
         self.libraryStore = libraryStore
         self.cloudService = cloudService
-        self.calendar = calendar
+        baseCalendar = calendar
+        systemTimeZone = calendar.timeZone
         self.now = now
         authenticateBiometricsAction = authenticateBiometrics
         self.setApplicationBadgeCount = setApplicationBadgeCount
@@ -225,6 +227,21 @@ final class AppStore {
 
     var sharedUpdateNotificationScope: SharedUpdateNotificationScope {
         preferences.sharedUpdateNotificationScope
+    }
+
+    var appTimeZone: AppTimeZone {
+        preferences.appTimeZone
+    }
+
+    var timeZone: TimeZone {
+        appTimeZone.resolve(systemTimeZone: systemTimeZone)
+    }
+
+    var calendar: Calendar {
+        var configuredCalendar = baseCalendar
+        configuredCalendar.locale = AppLanguage.locale
+        configuredCalendar.timeZone = timeZone
+        return configuredCalendar
     }
 
     var effectiveCurrentRepositoryNotificationScope: SharedUpdateNotificationScope {
@@ -287,7 +304,23 @@ final class AppStore {
     }
 
     var selectedDateTitle: String {
-        AppLanguage.monthDayTitle(for: selectedDate)
+        AppLanguage.monthDayTitle(for: selectedDate, timeZone: timeZone)
+    }
+
+    func monthYearTitle(for date: Date) -> String {
+        AppLanguage.monthYearTitle(for: date, timeZone: timeZone)
+    }
+
+    func timelineTitle(for entry: EntryRecord) -> String {
+        AppLanguage.timelineTitle(for: entry.happenedAt, timeZone: timeZone)
+    }
+
+    func cardDateTitle(for entry: EntryRecord) -> String {
+        AppLanguage.cardDateTitle(for: entry.happenedAt, timeZone: timeZone)
+    }
+
+    func journalCardDateTitle(for entry: EntryRecord) -> String {
+        AppLanguage.journalCardDateTitle(for: entry.happenedAt, timeZone: timeZone)
     }
 
     var currentRepositoryReference: RepositoryReference? {
@@ -434,6 +467,7 @@ final class AppStore {
             repositories = try libraryStore.loadCatalog()
             preferences = try libraryStore.loadPreferences()
             hasLoadedPreferences = true
+            resetCalendarContextToToday()
             let launchRepositoryID = repositories.contains(where: { $0.id == preferences.defaultRepositoryID })
                 ? preferences.defaultRepositoryID
                 : RepositoryReference.localRepositoryID
@@ -456,6 +490,12 @@ final class AppStore {
                 repositorySharedUpdateNotificationScope = .all
             }
         }
+    }
+
+    private func resetCalendarContextToToday() {
+        let today = calendar.startOfDay(for: now())
+        selectedDate = today
+        displayedMonth = calendar.startOfMonth(for: today)
     }
 
     func selectDate(_ date: Date) {
@@ -900,6 +940,60 @@ final class AppStore {
             try libraryStore.savePreferences(preferences)
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func setAppTimeZone(_ appTimeZone: AppTimeZone) {
+        guard appTimeZone != preferences.appTimeZone else {
+            return
+        }
+
+        let previousCalendar = calendar
+        let selectedDateComponents = previousCalendar.dateComponents([.year, .month, .day], from: selectedDate)
+        let displayedMonthComponents = previousCalendar.dateComponents([.year, .month], from: displayedMonth)
+        preferences.appTimeZone = appTimeZone
+
+        let updatedCalendar = calendar
+        preserveCalendarContext(
+            selectedDateComponents: selectedDateComponents,
+            displayedMonthComponents: displayedMonthComponents,
+            in: updatedCalendar
+        )
+
+        do {
+            try libraryStore.savePreferences(preferences)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func systemTimeZoneDidChange() {
+        let previousCalendar = calendar
+        let selectedDateComponents = previousCalendar.dateComponents([.year, .month, .day], from: selectedDate)
+        let displayedMonthComponents = previousCalendar.dateComponents([.year, .month], from: displayedMonth)
+        systemTimeZone = .autoupdatingCurrent
+
+        guard appTimeZone == .system else {
+            return
+        }
+
+        preserveCalendarContext(
+            selectedDateComponents: selectedDateComponents,
+            displayedMonthComponents: displayedMonthComponents,
+            in: calendar
+        )
+    }
+
+    private func preserveCalendarContext(
+        selectedDateComponents: DateComponents,
+        displayedMonthComponents: DateComponents,
+        in updatedCalendar: Calendar
+    ) {
+        if let updatedSelectedDate = updatedCalendar.date(from: selectedDateComponents) {
+            selectedDate = updatedCalendar.startOfDay(for: updatedSelectedDate)
+        }
+        if let updatedDisplayedMonth = updatedCalendar.date(from: displayedMonthComponents) {
+            displayedMonth = updatedCalendar.startOfMonth(for: updatedDisplayedMonth)
         }
     }
 
@@ -1873,7 +1967,7 @@ final class AppStore {
             return nil
         }
 
-        let previewText = firstEntry.displayTitle ?? firstEntry.summary.trimmed.nilIfEmpty ?? firstEntry.timelineTitle
+        let previewText = firstEntry.displayTitle ?? firstEntry.summary.trimmed.nilIfEmpty ?? timelineTitle(for: firstEntry)
         let title: String
         let body: String
         if changedEntries.count == 1 {

@@ -43,6 +43,7 @@ struct thatDayApp: App {
         WindowGroup {
             ContentView(store: store)
                 .environment(\.locale, AppLanguage.locale)
+                .environment(\.timeZone, store.timeZone)
                 .task(id: cloudShareDeliveryCenter.deliverySequence) {
                     for metadata in cloudShareDeliveryCenter.drainPendingMetadata() {
                         await store.acceptShare(metadata: metadata)
@@ -65,6 +66,9 @@ struct thatDayApp: App {
                     Task {
                         await store.handleScenePhaseChange(newPhase)
                     }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: Notification.Name.NSSystemTimeZoneDidChange)) { _ in
+                    store.systemTimeZoneDidChange()
                 }
         }
     }

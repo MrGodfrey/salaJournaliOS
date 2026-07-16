@@ -64,6 +64,8 @@ struct SettingsView: View {
                 importExportSection
 
                 advancedSection
+
+                timeZoneSection
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -403,6 +405,27 @@ struct SettingsView: View {
                 isShowingClearRepositoryConfirmation = true
             }
             .disabled(!store.canEditRepository)
+        }
+    }
+
+    private var timeZoneSection: some View {
+        Section("Date & Time") {
+            Picker(
+                "Time Zone",
+                selection: Binding(
+                    get: { store.appTimeZone },
+                    set: { store.setAppTimeZone($0) }
+                )
+            ) {
+                ForEach(AppTimeZone.allCases) { appTimeZone in
+                    Text(appTimeZone.title).tag(appTimeZone)
+                }
+            }
+            .accessibilityIdentifier("appTimeZonePicker")
+
+            Text("Dates and day grouping use this time zone. Saved timestamps remain in the standard UTC-based format.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 

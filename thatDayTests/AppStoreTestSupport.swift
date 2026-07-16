@@ -23,6 +23,7 @@ class AppStoreTestCase: XCTestCase {
         rootURL: URL? = nil,
         cloudService: any CloudRepositoryServicing = MockCloudRepositoryService(),
         preferences: AppPreferences? = nil,
+        calendar: Calendar = .autoupdatingCurrent,
         authenticateBiometrics: @escaping (String) async throws -> Void = { _ in },
         setApplicationBadgeCount: @escaping (Int) -> Void = { _ in }
     ) throws -> AppStore {
@@ -47,6 +48,7 @@ class AppStoreTestCase: XCTestCase {
         return AppStore(
             libraryStore: libraryStore,
             cloudService: cloudService,
+            calendar: calendar,
             now: { now },
             authenticateBiometrics: authenticateBiometrics,
             setApplicationBadgeCount: setApplicationBadgeCount
