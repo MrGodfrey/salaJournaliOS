@@ -83,7 +83,7 @@
 | 一台设备上可能有多座仓库 | 支持本地仓库、共享仓库、默认仓库切换和最近打开排序 |
 | 想备份、迁移或恢复数据 | 支持当前仓库导出 ZIP、导入 ZIP、清空当前仓库 |
 | 跨时区使用时需要稳定的日期归属 | 文章时间戳始终以 ISO 8601 / UTC 绝对时间保存；日期显示、Journal 归属和 Calendar 打点默认跟随系统时区，也可固定为北京时间，选择会持久保存 |
-| 共享仓库变化后想及时知道 | CloudKit 静默推送会直接在系统给出的后台时段内定位发生变化的 zone、拉取新快照，并在真正完成后向 iOS 汇报结果；另有持久化 change token / 待处理 zone 收件箱、应用启动 / 回到前台追赶和低频 `BGAppRefreshTask` 增量兜底。可见提醒权限与同步本身已经解耦：关闭提醒不会关闭后台同步。共享仓库编辑先本地落盘，待上传状态会跨进程保留并自动补传；上传使用服务端 change tag 防止覆盖别人刚写好的内容；CloudKit 返回 retry-after 时会持久化冷却时间，避免连续请求 |
+| 共享仓库变化后想及时知道 | CloudKit 静默推送会直接在系统给出的后台时段内定位发生变化的 zone、拉取新快照，并在真正完成后向 iOS 汇报结果；另有持久化 change token / 待处理 zone 收件箱、应用启动 / 回到前台追赶和低频 `BGAppRefreshTask` 增量兜底。可见提醒权限与同步本身已经解耦：关闭提醒不会关闭后台同步。订阅注册使用 production 已验证的 stable 配置并执行 save-only 自愈：升级、订阅缺失或配置异常时会补建并读回验证，绝不会在替代订阅确认前删除工作订阅；private / shared database 每轮最多各校验一次，成功后七天内不重复请求。共享仓库编辑先本地落盘，待上传状态会跨进程保留并自动补传；上传使用服务端 change tag 防止覆盖别人刚写好的内容；CloudKit 返回 retry-after 时会持久化冷却时间，避免连续请求 |
 | 共享仓库里的图片也要跟着走 | 共享快照会同步正文和本地图片，图片在 CloudKit 中独立保存；根快照记录每张图的 SHA-256，文字修改不会重新读写未变化图片，新增 / 替换 / 删除图片则与根记录原子提交。拉取只复用哈希一致的本地缓存，并兼容旧版同名图片被原地替换的情况 |
 | 插图不能无限膨胀 | 选图后会自动压缩并保证单张图片保存到 `100KB` 以下 |
 
@@ -128,6 +128,7 @@
 - 应用启动后会立即检查已接入共享仓库的最新快照；刷新先比较 CloudKit 服务端 `recordChangeTag`，旧数据没有该字段时才回退到 `updatedAt` / `entryCount`，因此不会再因两台设备时钟偏差漏掉内容变化
 - 回到前台会在距离上次成功同步超过 `30` 秒时追赶一次；短时间反复切换前后台会被去抖，避免制造无意义 CloudKit 请求
 - iOS 在后台交付 CloudKit 静默推送时，应用会直接完成同步并按真实结果返回 `newData / noData / failed`；如果检测到可见内容变化且用户开启了提醒，会显示本地通知并把角标置为 `1`。应用进入前台后角标立刻清零
+- `1.2.10` 会强制重新验证并修复 `1.2.9` 的 CloudKit 订阅迁移状态：共享成员恢复 production 已验证的全 shared database 订阅，仓库所有者恢复逐 zone 订阅；修复只保存和读回验证，不删除任何现存订阅。APNs 注册会在应用再次激活时重试，订阅、推送处理、上传和本地提醒失败会写入统一的 `CloudSync` 系统日志
 - 新增、编辑和删除文章都会进入共享更新提醒判断；删除通知会打开对应仓库，而不会尝试跳到已经不存在的文章
 
 ### 3.2 Journal
@@ -224,8 +225,8 @@
 - Scheme：`thatDay`
 - Bundle ID：`yu.thatDay`
 - iCloud 容器：`iCloud.yu.thatDay`
-- 应用显示名：`日记本`
-- 当前发布版本：`1.2.9 (2)`
+- 应用显示名：`Kala Journal`
+- 当前发布版本：`1.2.10 (3)`
 - 商店素材资源：`thatDay/Assets.xcassets/AppStore.imageset`、`thatDay/Assets.xcassets/PlayStore.imageset`
 
 ### 4.2 状态中心
@@ -326,11 +327,11 @@ Application Support/thatDay/
 - `thatDayApp.swift` 负责接住 scene/app 生命周期、远端推送、低频后台刷新、iCloud 账号变化和共享接受事件
 - `AppEventBridge.swift` 里的 `RepositoryRemoteChangeCenter` / `NotificationRouteCenter` 负责把系统事件桥接回 `AppStore`
 - `AppStore` 负责按启动 / 前台 / 推送 / 系统后台恢复 / 手动五类触发刷新共享仓库、比对快照差异、生成本地通知和应用角标，以及在点击通知后切换到对应仓库和文章；手动下拉只检查当前共享仓库
-- private / shared database 各只维护一个过滤到 `RepositoryRoot` 的 `CKDatabaseSubscription`，不再为图片资产变化重复唤醒；订阅状态会在本地记忆并以七天为周期校验，避免每次启动都写订阅。升级时每座 private owner 仓库都会各自清理旧 zone subscription，不能因第一座仓库已建好 database subscription 就漏掉其他仓库的旧订阅
+- shared database 使用一份稳定、不过滤记录类型的 `CKDatabaseSubscription`；每座 private owner 仓库使用稳定的逐 zone `CKRecordZoneSubscription`。`1.2.10` 修复时只补建或纠正稳定订阅、保存后按 ID 读回确认，绝不在同一迁移里删除旧订阅，因此即使某次保存失败也不会再次形成“新旧订阅同时不存在”的漏推窗口。订阅状态会在本地记忆并以七天为周期校验；同一轮 private / shared database 各批量盘点一次，发生修复时额外批量读回一次。普通失败在本次进程内不反复重试，CloudKit 返回 retry-after 时则严格等到冷却到期
 - 数据库推送到达后先用持久化 `CKServerChangeToken` 读取发生变化的 zone，只刷新这些仓库；新 token 和待处理 zone 会先原子落入本地收件箱，只有仓库快照成功保存后才确认对应 zone，因此下载失败或进程中止不会永久漏掉这次 invalidation
 - 三类 zone 删除原因分别处理：普通 `deleted`（包括共享被撤销）保留最后一份缓存并标成不可用只读；`purged` 会先把禁止补传的 tombstone 写入 catalog，再按 Apple 语义幂等删除本地缓存，即使清理中途终止也不会在重启时重建 outbox；`encryptedDataReset` 会让 owner 从持久化 outbox 或完整本地快照重建 private zone，共享参与者则保留无权重建的只读缓存。重建回执及其后续编辑代际会一直保留恢复模式，直到对应 change-token 删除事件确认成功；如果本地快照或其中任何图片缺失，恢复会失败并保留事件等待重试，绝不上传空仓库或不完整快照
 - 远端推送回调不再只把事件塞进前台队列并提前返回，而是在 iOS 提供的后台执行窗口里真正完成同步，再把真实结果交回系统
-- Journal / Blog 的手动下拉刷新会直接复用共享仓库拉取链路；应用启动会立即追赶，回到前台超过 `30` 秒会追赶，系统另提交最早一小时后的 `BGAppRefreshTask` 作为漏推送兜底；后台任务一开始就先提交下一次 successor，因此本次执行中途被系统终止也不会丢掉后续兜底。后台兜底按 private / shared database change token 增量检查，不逐座仓库轮询，实际执行时间仍由 iOS 决定
+- Journal / Blog 的手动下拉刷新会直接复用共享仓库拉取链路；应用启动会立即追赶，回到前台超过 `30` 秒会追赶，系统另提交最早一小时后的 `BGAppRefreshTask` 作为漏推送兜底；后台任务一开始就尝试提交下一次 successor，系统接受该请求时，即使本次执行中途终止也仍保留后续兜底。后台兜底按 private / shared database change token 增量检查，不逐座仓库轮询，是否接受和何时执行仍由 iOS 决定
 - 定向 zone 推送、单仓库手动刷新不会重置“完整前台巡检”的去抖时间；因此某座仓库刚被推送刷新，也不会让另一座漏掉推送的仓库在应用打开时继续等待
 - 快照是否变化优先使用 CloudKit 服务端 `recordChangeTag`，不再把客户端 `updatedAt` 当作跨设备权威时钟；这可以覆盖“时间戳和条目数相同但正文已变”的情况
 - 如果 CloudKit 返回 retry-after，例如 `requestRateLimited`、`serviceUnavailable` 或嵌套在 partial failure 里的限流错误，应用会把冷却截止时间写入 `preferences.json`；同一批多仓库 / 多订阅处理会立即停止后续请求，冷却期间自动同步和待上传补传都会跳过，后台兜底不会把这次跳过误记成成功刷新。应用在前台时会按这个绝对截止时间安排单个可取消唤醒，到期自动补传和追赶；后台 request 的 earliest date 也不会早于更长的冷却时间，避免重启或多仓库循环绕过限流形成 retry storm
@@ -450,14 +451,14 @@ UI 测试覆盖：
 
 ### 5.4 最近一次完整验证
 
-- 时间：2026-07-26 02:58 - 03:06（Europe/London）
-- 单元测试命令：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -derivedDataPath /tmp/thatDay-full-unit-release-final -only-testing:thatDayTests`
-- UI 测试命令：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -derivedDataPath /tmp/thatDay-ui-release-final -parallel-testing-enabled NO -only-testing:thatDayUITests`
+- 时间：2026-07-26 23:37 - 23:44（Europe/London）
+- 单元测试命令：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -derivedDataPath /tmp/thatDay-1.2.10-final-unit -parallel-testing-enabled NO -only-testing:thatDayTests`
+- UI 测试命令：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -derivedDataPath /tmp/thatDay-1.2.10-final-ui -parallel-testing-enabled NO -only-testing:thatDayUITests`
 - 结果：通过
-- 单元测试：146 项通过，零失败、零跳过
+- 单元测试：157 项通过，零失败、零跳过
 - UI 测试：32 次执行通过（24 个常规 UI 用例 + 8 个 Launch test 动态参数运行），零失败
-- 单元测试 xcresult：`/tmp/thatDay-full-unit-release-final/Logs/Test/Test-thatDay-2026.07.26_02-58-27-+0100.xcresult`
-- UI 测试 xcresult：`/tmp/thatDay-ui-release-final/Logs/Test/Test-thatDay-2026.07.26_03-00-47-+0100.xcresult`
+- 单元测试 xcresult：`/tmp/thatDay-1.2.10-final-unit/Logs/Test/Test-thatDay-2026.07.26_23-37-59-+0100.xcresult`
+- UI 测试 xcresult：`/tmp/thatDay-1.2.10-final-ui/Logs/Test/Test-thatDay-2026.07.26_23-38-35-+0100.xcresult`
 
 ### 5.5 本次测试里看到但不属于业务失败的问题
 

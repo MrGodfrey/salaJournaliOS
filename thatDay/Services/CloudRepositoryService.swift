@@ -52,6 +52,11 @@ nonisolated struct CloudRepositoryDatabaseChanges: Equatable, Sendable {
     var deletedZones: Set<CloudRepositoryZoneDeletion> = []
 }
 
+nonisolated struct CloudSubscriptionRepairPlan: Sendable {
+    var subscriptionToSave: CKSubscription?
+    var subscriptionIDsToDelete: [CKSubscription.ID]
+}
+
 protocol CloudRepositoryServicing {
     func loadSnapshotMetadata(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshotMetadata
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot
@@ -71,6 +76,9 @@ protocol CloudRepositoryServicing {
         acceptedPredecessorOperationIDs: Set<UUID>
     ) async throws -> SavedRepositorySnapshot
     func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws
+    func ensureRepositorySubscriptions(
+        using descriptors: [RepositoryDescriptor]
+    ) async throws
     func pendingRepositoryZoneChanges(
         in scope: CloudDatabaseScope
     ) async throws -> CloudRepositoryDatabaseChanges
@@ -95,6 +103,14 @@ extension CloudRepositoryServicing {
         availableImageContentHashes: [String: String]
     ) async throws -> RepositorySnapshot {
         try await loadSnapshot(using: descriptor)
+    }
+
+    func ensureRepositorySubscriptions(
+        using descriptors: [RepositoryDescriptor]
+    ) async throws {
+        for descriptor in descriptors {
+            try await ensureRepositorySubscription(using: descriptor)
+        }
     }
 }
 
@@ -153,14 +169,15 @@ enum CloudRepositoryError: LocalizedError {
 }
 
 final class CloudRepositoryService: CloudRepositoryServicing {
-    private enum Constant {
+    nonisolated private enum Constant {
         static let zoneName = "thatday-repository"
         static let rootRecordName = "RepositoryRoot"
         static let recordType = "RepositoryRoot"
         static let imageRecordType = "RepositoryImageAsset"
-        static let privateDatabaseSubscriptionID = "repository-root-updates-private-v2"
-        static let sharedDatabaseSubscriptionID = "repository-root-updates-shared-v2"
-        static let legacySharedDatabaseSubscriptionID = "repository-updates-shared-database"
+        // These are the stable subscription configurations shipped before
+        // 1.2.9 and already exercised in CloudKit's production environment.
+        static let stableSharedDatabaseSubscriptionID =
+            "repository-updates-shared-database"
         static let updatedAtKey: CKRecord.FieldKey = "updatedAt"
         static let entryCountKey: CKRecord.FieldKey = "entryCount"
         static let payloadKey: CKRecord.FieldKey = "payload"
@@ -597,81 +614,223 @@ final class CloudRepositoryService: CloudRepositoryServicing {
     }
 
     func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws {
-        let subscription: CKDatabaseSubscription
-        let database: CKDatabase
-        let obsoleteSubscriptionIDs: [CKSubscription.ID]
+        try await ensureRepositorySubscriptions(using: [descriptor])
+    }
 
-        switch descriptor.role {
-        case .local:
-            return
-        case .owner:
-            database = privateDatabase
-            subscription = CKDatabaseSubscription(
-                subscriptionID: Constant.privateDatabaseSubscriptionID
+    func ensureRepositorySubscriptions(
+        using descriptors: [RepositoryDescriptor]
+    ) async throws {
+        let cloudDescriptors = descriptors.filter(\.isCloudBacked)
+        let ownerDescriptors = cloudDescriptors.filter {
+            $0.role == .owner
+        }
+        let sharedDescriptors = cloudDescriptors.filter {
+            $0.role == .editor || $0.role == .viewer
+        }
+
+        if !ownerDescriptors.isEmpty {
+            try await ensureRepositorySubscriptions(
+                using: ownerDescriptors,
+                in: privateDatabase
             )
-            obsoleteSubscriptionIDs = legacySubscriptionIDs(for: descriptor)
-        case .editor, .viewer:
-            database = sharedDatabase
-            subscription = CKDatabaseSubscription(subscriptionID: Constant.sharedDatabaseSubscriptionID)
-            obsoleteSubscriptionIDs = [Constant.legacySharedDatabaseSubscriptionID]
         }
+        if !sharedDescriptors.isEmpty {
+            try await ensureRepositorySubscriptions(
+                using: sharedDescriptors,
+                in: sharedDatabase
+            )
+        }
+    }
 
-        subscription.recordType = Constant.recordType
-        let notificationInfo = CKSubscription.NotificationInfo()
-        notificationInfo.shouldSendContentAvailable = true
-        subscription.notificationInfo = notificationInfo
-
-        let candidateIDs = Array(
-            Set([subscription.subscriptionID] + obsoleteSubscriptionIDs)
+    private func ensureRepositorySubscriptions(
+        using descriptors: [RepositoryDescriptor],
+        in database: CKDatabase
+    ) async throws {
+        let existingSubscriptions = try await database.allSubscriptions()
+        let repairPlans = descriptors.map {
+            Self.subscriptionRepairPlan(
+                using: $0,
+                existingSubscriptions: existingSubscriptions
+            )
+        }
+        let subscriptionsToSave = Dictionary(
+            repairPlans.compactMap(\.subscriptionToSave).map {
+                ($0.subscriptionID, $0)
+            },
+            uniquingKeysWith: { existing, _ in existing }
         )
-        let existingSubscriptions = try await database.subscriptions(for: candidateIDs)
-        for result in existingSubscriptions.values {
-            if case let .failure(error) = result,
-               !Self.isUnknownItemError(error) {
-                throw error
-            }
-        }
-
-        let currentSubscription: CKDatabaseSubscription?
-        if case let .success(existing)? = existingSubscriptions[subscription.subscriptionID] {
-            currentSubscription = existing as? CKDatabaseSubscription
-        } else {
-            currentSubscription = nil
-        }
-        let isCurrentConfiguration =
-            currentSubscription?.recordType == Constant.recordType &&
-            currentSubscription?.notificationInfo?.shouldSendContentAvailable == true
-        let obsoleteExistingIDs = obsoleteSubscriptionIDs.filter {
-            if case .success? = existingSubscriptions[$0] {
-                return $0 != subscription.subscriptionID
-            }
-            return false
-        }
-        guard !isCurrentConfiguration || !obsoleteExistingIDs.isEmpty else {
+        guard !subscriptionsToSave.isEmpty else {
             return
         }
 
-        let subscriptionsToSave = isCurrentConfiguration ? [] : [subscription]
+        // Intentionally never combine a repair save with a deletion. CloudKit
+        // reports subscription modifications per item, so a replacement save
+        // can fail while an old working subscription is still deleted.
         let result = try await database.modifySubscriptions(
-            saving: subscriptionsToSave,
-            deleting: obsoleteExistingIDs
+            saving: Array(subscriptionsToSave.values),
+            deleting: []
         )
-        if !isCurrentConfiguration {
-            switch result.saveResults[subscription.subscriptionID] {
-            case .success:
-                break
+        for (subscriptionID, subscription) in subscriptionsToSave {
+            let matchingDescriptors = descriptors.filter {
+                Self.isStableRepositorySubscription(subscription, for: $0)
+            }
+            guard !matchingDescriptors.isEmpty else {
+                throw CloudRepositoryError.shareUnavailable
+            }
+            switch result.saveResults[subscriptionID] {
+            case .success(let savedSubscription):
+                guard matchingDescriptors.contains(where: {
+                    Self.isStableRepositorySubscription(
+                        savedSubscription,
+                        for: $0
+                    )
+                }) else {
+                    throw CloudRepositoryError.shareUnavailable
+                }
             case .failure(let error):
                 throw error
             case nil:
                 throw CloudRepositoryError.shareUnavailable
             }
         }
-        for subscriptionID in obsoleteExistingIDs {
-            if case let .failure(error)? = result.deleteResults[subscriptionID],
-               !Self.isUnknownItemError(error) {
+
+        // Do not mark the repair successful from the modify response alone.
+        // Read it back so a partial or server-side configuration failure cannot
+        // leave the catalog claiming that push delivery is configured.
+        let verificationResults = try await database.subscriptions(
+            for: Array(subscriptionsToSave.keys)
+        )
+        for (subscriptionID, subscription) in subscriptionsToSave {
+            let matchingDescriptors = descriptors.filter {
+                Self.isStableRepositorySubscription(subscription, for: $0)
+            }
+            switch verificationResults[subscriptionID] {
+            case .success(let verifiedSubscription):
+                guard matchingDescriptors.contains(where: {
+                    Self.isStableRepositorySubscription(
+                        verifiedSubscription,
+                        for: $0
+                    )
+                }) else {
+                    throw CloudRepositoryError.shareUnavailable
+                }
+            case .failure(let error):
                 throw error
+            case nil:
+                throw CloudRepositoryError.shareUnavailable
             }
         }
+    }
+
+    nonisolated static func subscriptionRepairPlan(
+        using descriptor: RepositoryDescriptor,
+        existingSubscriptions: [CKSubscription]
+    ) -> CloudSubscriptionRepairPlan {
+        if existingSubscriptions.contains(where: {
+            isStableRepositorySubscription($0, for: descriptor)
+        }) {
+            return CloudSubscriptionRepairPlan(
+                subscriptionToSave: nil,
+                subscriptionIDsToDelete: []
+            )
+        }
+
+        return CloudSubscriptionRepairPlan(
+            subscriptionToSave: stableSubscription(for: descriptor),
+            // A repair must never delete a working fallback. CloudKit
+            // subscription modifications can partially succeed, so cleanup
+            // belongs in a later release after field verification.
+            subscriptionIDsToDelete: []
+        )
+    }
+
+    nonisolated static func isStableRepositorySubscription(
+        _ subscription: CKSubscription,
+        for descriptor: RepositoryDescriptor
+    ) -> Bool {
+        guard isSilentOnlyNotificationInfo(subscription.notificationInfo)
+        else {
+            return false
+        }
+
+        switch descriptor.role {
+        case .local:
+            return false
+        case .owner:
+            guard let expectedZoneID = descriptor.zoneID,
+                  let zoneSubscription =
+                    subscription as? CKRecordZoneSubscription else {
+                return false
+            }
+            return zoneSubscription.zoneID == expectedZoneID &&
+                zoneSubscription.recordType == nil
+        case .editor, .viewer:
+            guard subscription.subscriptionID ==
+                    Constant.stableSharedDatabaseSubscriptionID,
+                  let databaseSubscription =
+                    subscription as? CKDatabaseSubscription else {
+                return false
+            }
+            return databaseSubscription.recordType == nil
+        }
+    }
+
+    nonisolated static func isSilentOnlyNotificationInfo(
+        _ notificationInfo: CKSubscription.NotificationInfo?
+    ) -> Bool {
+        guard let notificationInfo,
+              notificationInfo.shouldSendContentAvailable,
+              notificationInfo.alertBody == nil,
+              notificationInfo.alertLocalizationKey == nil,
+              notificationInfo.alertLocalizationArgs?.isEmpty != false,
+              notificationInfo.title == nil,
+              notificationInfo.titleLocalizationKey == nil,
+              notificationInfo.titleLocalizationArgs?.isEmpty != false,
+              notificationInfo.subtitle == nil,
+              notificationInfo.subtitleLocalizationKey == nil,
+              notificationInfo.subtitleLocalizationArgs?.isEmpty != false,
+              notificationInfo.alertActionLocalizationKey == nil,
+              notificationInfo.alertLaunchImage == nil,
+              notificationInfo.soundName == nil,
+              notificationInfo.desiredKeys?.isEmpty != false,
+              !notificationInfo.shouldBadge,
+              !notificationInfo.shouldSendMutableContent,
+              notificationInfo.category == nil,
+              notificationInfo.collapseIDKey == nil else {
+            return false
+        }
+        return true
+    }
+
+    nonisolated private static func stableSubscription(
+        for descriptor: RepositoryDescriptor
+    ) -> CKSubscription? {
+        let subscription: CKSubscription
+        switch descriptor.role {
+        case .local:
+            return nil
+        case .owner:
+            guard let zoneID = descriptor.zoneID else {
+                return nil
+            }
+            var stableDescriptor = descriptor
+            stableDescriptor.shareRecordName = nil
+            subscription = CKRecordZoneSubscription(
+                zoneID: zoneID,
+                subscriptionID: legacySubscriptionID(
+                    for: stableDescriptor
+                )
+            )
+        case .editor, .viewer:
+            subscription = CKDatabaseSubscription(
+                subscriptionID: Constant.stableSharedDatabaseSubscriptionID
+            )
+        }
+
+        let notificationInfo = CKSubscription.NotificationInfo()
+        notificationInfo.shouldSendContentAvailable = true
+        subscription.notificationInfo = notificationInfo
+        return subscription
     }
 
     func pendingRepositoryZoneChanges(
@@ -1326,24 +1485,12 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         return lastPathComponent.nilIfEmpty
     }
 
-    private func legacySubscriptionIDs(for descriptor: RepositoryDescriptor) -> [CKSubscription.ID] {
-        var descriptors = [descriptor]
-        var descriptorWithoutShare = descriptor
-        descriptorWithoutShare.shareRecordName = nil
-        descriptors.append(descriptorWithoutShare)
-
-        return Array(
-            Set(descriptors.map { "repository-updates-\($0.storageIdentifier)" })
-        )
+    nonisolated private static func legacySubscriptionID(
+        for descriptor: RepositoryDescriptor
+    ) -> CKSubscription.ID {
+        "repository-updates-\(descriptor.storageIdentifier)"
     }
 
-    private static func isUnknownItemError(_ error: Error) -> Bool {
-        guard let cloudError = error as? CKError else {
-            return false
-        }
-
-        return cloudError.code == .unknownItem
-    }
 }
 
 private extension ShareAccessOption {

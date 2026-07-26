@@ -145,6 +145,7 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     var saveSnapshotError: Error?
     var recreateSnapshotError: Error?
     var ensureSubscriptionError: Error?
+    var ensureSubscriptionErrorsByRole: [RepositoryRole: Error] = [:]
     var acknowledgeZoneChangesError: Error?
     var makeSharingControllerError: Error?
     var metadataRecordChangeTag: String?
@@ -348,6 +349,9 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
 
     func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws {
         ensuredSubscriptionDescriptors.append(descriptor)
+        if let roleError = ensureSubscriptionErrorsByRole[descriptor.role] {
+            throw roleError
+        }
         if let ensureSubscriptionError {
             throw ensureSubscriptionError
         }

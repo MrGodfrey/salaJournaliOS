@@ -996,3 +996,31 @@
   - Xcode 图形账户凭据失效时首次导出报 `Failed to Use Accounts`；改用本机 App Store Connect API Key 后 IPA 上传成功
   - 构建 `1.2.9 (2)` 处理状态为 `VALID`，已创建商店版本、绑定构建并写入中英文更新说明
   - 使用 Apple 当前 Review Submissions 接口提交审核，发布方式为审核通过后自动发布；提交状态为 `WAITING_FOR_REVIEW`
+
+## 2026-07-26 23:55
+
+- 修复 `1.2.9` CloudKit 订阅迁移可能使接收方失去后台更新的问题：
+  - 根因是旧订阅删除和新版订阅保存放在同一个非原子 `CKModifySubscriptionsOperation` 中；CloudKit 允许逐项部分失败，因此新版保存失败时旧订阅仍可能被删除，最终变成零订阅
+  - 订阅配置版本升级为 v3，恢复已经在生产环境验证过的稳定标识与范围：shared database 保持单份 database subscription，owner private zone 保持逐 zone record-zone subscription
+  - 修复流程改为只保存、不删除；保存后按 ID 回读验证，确认服务器实际存在且配置为纯静默通知后才记为成功
+  - private / shared 分组独立修复，一个 scope 失败不再阻塞另一个；同一进程对非限流失败只尝试一次，CloudKit 返回 retry-after 时继续使用持久化冷却与到期重试
+  - 成功校验不会永久锁住当前进程，七天定期复核与之后新增的 owner zone 仍可在同一次长运行中建立订阅
+- 增强后台同步可观测性与恢复：
+  - 增加统一 CloudSync 日志，覆盖 APNs 注册、远端通知接收与处理结果、后台追赶、上传结果及本地通知排队失败
+  - App 回到前台时幂等重试 APNs 注册；版本首次启动、前台恢复、静默推送和低频后台任务仍共同触发基于 change token 的增量追赶
+  - README 已同步说明 v3 自修复、CloudKit 请求预算和 Apple 后台静默推送的 best-effort 边界
+- 版本与测试：
+  - Marketing Version 更新为 `1.2.10`，build number 更新为 `3`
+  - 新增订阅迁移、旧/异常配置修复、静默通知约束、分 scope 容错、失败去重和长运行周期复核测试
+  - 单元测试 `157/157` 通过，零失败、零跳过；xcresult：`/tmp/thatDay-1.2.10-final-unit/Logs/Test/Test-thatDay-2026.07.26_23-37-59-+0100.xcresult`
+  - UI 测试 `32/32` 通过（常规 `24/24`、Launch `8/8`），零失败；xcresult：`/tmp/thatDay-1.2.10-final-ui/Logs/Test/Test-thatDay-2026.07.26_23-38-35-+0100.xcresult`
+  - `plutil -lint`、`git diff --check`、无签名 generic iOS Release 构建、签名归档与 IPA 导出均通过
+  - 归档：`/tmp/thatDay-1.2.10.xcarchive`；IPA SHA-256：`4aff5bb4f76605a4549d1f245ea1752e00a33bcd7a66a7b1eedfbb51ba3b0d1b`
+  - IPA 已核验生产 `aps-environment`、Production CloudKit 环境、`iCloud.yu.thatDay` 容器和 `get-task-allow=false`
+- App Store Connect 发布：
+  - 构建 `1.2.10 (3)`（ID `e5fd7a27-8acf-4328-9251-734e8c55bee7`）处理状态为 `VALID`，已精确绑定到 iOS `1.2.10`
+  - 中英文更新说明完整，发布方式为审核通过后自动发布
+  - Review Submission `478709db-a5b4-4e5d-8948-e14389386e0b` 已提交，状态为 `WAITING_FOR_REVIEW`
+  - 已上架的 `1.2.9` 保持 `READY_FOR_SALE`，未撤回、未下架
+- 文档勘误：
+  - README 明确 `BGAppRefreshTask` successor 只有在系统接受请求后才构成后续兜底，避免把 Apple 的 best-effort 调度描述成确定性保证

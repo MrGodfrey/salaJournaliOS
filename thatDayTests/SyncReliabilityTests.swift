@@ -90,7 +90,7 @@ final class SyncReliabilityTests: AppStoreTestCase {
     }
 
     @MainActor
-    func testSubscriptionMigrationCleansLegacyStateForEveryPrivateOwnerRepository() async throws {
+    func testSubscriptionRepairValidatesEveryPrivateOwnerRepositoryAsVersionThree() async throws {
         let rootURL = makeTempDirectory()
         let validationDate = fixtureDate("2026-07-21T15:00:00Z")
         let firstDescriptor = RepositoryDescriptor(
@@ -165,9 +165,223 @@ final class SyncReliabilityTests: AppStoreTestCase {
         XCTAssertEqual(persistedOwners.count, 2)
         XCTAssertTrue(
             persistedOwners.allSatisfy {
-                $0.subscriptionConfigurationVersion == 2 &&
+                $0.subscriptionConfigurationVersion == 3 &&
                     $0.subscriptionValidatedAt == validationDate
             }
+        )
+    }
+
+    @MainActor
+    func testFailedPrivateRepairDoesNotBlockOrValidateSuccessfulSharedRepair() async throws {
+        let rootURL = makeTempDirectory()
+        let validationDate = fixtureDate("2026-07-26T21:00:00Z")
+        let ownerDescriptor = RepositoryDescriptor(
+            zoneName: "failed-private-repair-zone",
+            zoneOwnerName: CKCurrentUserDefaultName,
+            shareRecordName: "failed-private-repair-share",
+            role: .owner
+        )
+        let viewerDescriptor = RepositoryDescriptor(
+            zoneName: "successful-shared-repair-zone",
+            zoneOwnerName: "_successful_shared_owner_",
+            shareRecordName: "successful-shared-repair-share",
+            role: .viewer
+        )
+        let ownerSnapshot = RepositorySnapshot(
+            entries: [makeEntry(title: "Owner", happenedAt: validationDate)],
+            updatedAt: validationDate
+        )
+        let viewerSnapshot = RepositorySnapshot(
+            entries: [makeEntry(title: "Viewer", happenedAt: validationDate)],
+            updatedAt: validationDate
+        )
+        let ownerReference = RepositoryReference(
+            id: ownerDescriptor.storageIdentifier,
+            displayName: "Owner",
+            descriptor: ownerDescriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: validationDate,
+            subscriptionConfigurationVersion: 2,
+            subscriptionValidatedAt: validationDate
+        )
+        let viewerReference = RepositoryReference(
+            id: viewerDescriptor.storageIdentifier,
+            displayName: "Viewer",
+            descriptor: viewerDescriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: validationDate,
+            subscriptionConfigurationVersion: 2,
+            subscriptionValidatedAt: validationDate
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [ownerReference, viewerReference],
+            snapshotsByRepositoryID: [
+                ownerReference.id: ownerSnapshot,
+                viewerReference.id: viewerSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: RepositoryReference.localRepositoryID
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshotsByRepositoryID = [
+            ownerReference.id: ownerSnapshot,
+            viewerReference.id: viewerSnapshot
+        ]
+        cloudService.ensureSubscriptionErrorsByRole[.owner] =
+            SimulatedSubscriptionRepairError.failed
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { validationDate }
+        )
+
+        await store.loadIfNeeded()
+
+        let persisted = try libraryStore.loadCatalog()
+        XCTAssertEqual(
+            persisted.first(where: { $0.id == ownerReference.id })?
+                .subscriptionConfigurationVersion,
+            2
+        )
+        XCTAssertEqual(
+            persisted.first(where: { $0.id == viewerReference.id })?
+                .subscriptionConfigurationVersion,
+            3
+        )
+        XCTAssertEqual(
+            cloudService.ensuredSubscriptionDescriptors,
+            [ownerDescriptor, viewerDescriptor]
+        )
+    }
+
+    @MainActor
+    func testFailedSubscriptionRepairIsAttemptedOnlyOncePerRunningProcess() async throws {
+        let rootURL = makeTempDirectory()
+        let validationDate = fixtureDate("2026-07-26T21:30:00Z")
+        let descriptor = RepositoryDescriptor(
+            zoneName: "single-attempt-zone",
+            zoneOwnerName: "_single_attempt_owner_",
+            shareRecordName: "single-attempt-share",
+            role: .viewer
+        )
+        let snapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Single subscription attempt",
+                    happenedAt: validationDate
+                )
+            ],
+            updatedAt: validationDate
+        )
+        let reference = RepositoryReference(
+            id: descriptor.storageIdentifier,
+            displayName: "Single Attempt",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: validationDate,
+            subscriptionConfigurationVersion: 2,
+            subscriptionValidatedAt: validationDate
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [reference.id: snapshot],
+            preferences: AppPreferences(
+                defaultRepositoryID: RepositoryReference.localRepositoryID
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = snapshot
+        cloudService.ensureSubscriptionError =
+            SimulatedSubscriptionRepairError.failed
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { validationDate }
+        )
+
+        await store.loadIfNeeded()
+        await store.handleScenePhaseChange(.active)
+        await store.handleScenePhaseChange(.inactive)
+        await store.handleScenePhaseChange(.active)
+
+        XCTAssertEqual(
+            cloudService.ensuredSubscriptionDescriptors,
+            [descriptor]
+        )
+        XCTAssertEqual(
+            try libraryStore.loadCatalog().first(where: { $0.id == reference.id })?
+                .subscriptionConfigurationVersion,
+            2
+        )
+    }
+
+    @MainActor
+    func testSuccessfulSubscriptionRepairCanRevalidateAfterSevenDaysInSameProcess() async throws {
+        let rootURL = makeTempDirectory()
+        let initialDate = fixtureDate("2026-07-18T21:30:00Z")
+        var currentDate = initialDate
+        let descriptor = RepositoryDescriptor(
+            zoneName: "periodic-validation-zone",
+            zoneOwnerName: "_periodic_validation_owner_",
+            shareRecordName: "periodic-validation-share",
+            role: .viewer
+        )
+        let snapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Periodic subscription validation",
+                    happenedAt: initialDate
+                )
+            ],
+            updatedAt: initialDate
+        )
+        let reference = RepositoryReference(
+            id: descriptor.storageIdentifier,
+            displayName: "Periodic Validation",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: initialDate,
+            subscriptionConfigurationVersion: 2,
+            subscriptionValidatedAt: initialDate
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [reference.id: snapshot],
+            preferences: AppPreferences(
+                defaultRepositoryID: RepositoryReference.localRepositoryID
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = snapshot
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { currentDate }
+        )
+
+        await store.loadIfNeeded()
+        currentDate = initialDate.addingTimeInterval(8 * 24 * 60 * 60)
+        await store.handleScenePhaseChange(.inactive)
+        await store.handleScenePhaseChange(.active)
+
+        XCTAssertEqual(
+            cloudService.ensuredSubscriptionDescriptors,
+            [descriptor, descriptor]
+        )
+        let persistedReference = try libraryStore.loadCatalog().first {
+            $0.id == reference.id
+        }
+        XCTAssertEqual(
+            persistedReference?.subscriptionConfigurationVersion,
+            3
+        )
+        XCTAssertEqual(
+            persistedReference?.subscriptionValidatedAt,
+            currentDate
         )
     }
 
@@ -2048,6 +2262,10 @@ final class SyncReliabilityTests: AppStoreTestCase {
 }
 
 private enum SimulatedUploadError: Error {
+    case failed
+}
+
+private enum SimulatedSubscriptionRepairError: Error {
     case failed
 }
 

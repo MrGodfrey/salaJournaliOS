@@ -1,8 +1,16 @@
 import CloudKit
 import Combine
 import Foundation
+import OSLog
 import UIKit
 import UserNotifications
+
+nonisolated enum SyncDiagnostics {
+    static let logger = Logger(
+        subsystem: "yu.thatDay",
+        category: "CloudSync"
+    )
+}
 
 struct NotificationEntryRoute: Hashable, Sendable {
     var repositoryID: String
@@ -79,21 +87,38 @@ final class RepositoryRemoteChangeCenter {
         guard let target = CloudRemoteNotificationTarget(
             remoteNotificationDictionary: userInfo
         ) else {
+            SyncDiagnostics.logger.notice(
+                "Ignored a remote notification that was not a supported CloudKit database or zone notification."
+            )
             return .noData
         }
         guard let handler else {
+            SyncDiagnostics.logger.error(
+                "Received a CloudKit notification before the repository sync handler was installed."
+            )
             return .failed
         }
 
-        return await handler(target)
+        let result = await handler(target)
+        SyncDiagnostics.logger.info(
+            "Finished CloudKit push processing with background result \(result.rawValue, privacy: .public)."
+        )
+        return result
     }
 
     func performRecoveryRefresh() async -> UIBackgroundFetchResult {
         guard let handler else {
+            SyncDiagnostics.logger.error(
+                "Background recovery ran before the repository sync handler was installed."
+            )
             return .failed
         }
 
-        return await handler(nil)
+        let result = await handler(nil)
+        SyncDiagnostics.logger.info(
+            "Finished scheduled CloudKit recovery with background result \(result.rawValue, privacy: .public)."
+        )
+        return result
     }
 }
 

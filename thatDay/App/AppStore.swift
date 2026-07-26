@@ -1,6 +1,7 @@
 import CloudKit
 import LocalAuthentication
 import Observation
+import OSLog
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -135,7 +136,7 @@ private struct SharedRepositoryRefreshSelection {
 @Observable
 final class AppStore {
     private static let foregroundSharedRefreshMinimumInterval: TimeInterval = 30
-    private static let subscriptionConfigurationVersion = 2
+    private static let subscriptionConfigurationVersion = 3
     private static let subscriptionRevalidationInterval: TimeInterval = 7 * 24 * 60 * 60
 
     private let libraryStore: RepositoryLibraryStore
@@ -162,6 +163,8 @@ final class AppStore {
     private var sharedCloudThrottleRetryTask: Task<Void, Never>?
     private var sharedRepositoryRefreshTask: Task<SharedRepositoryRefreshResult, Never>?
     private var sharedRepositoryRefreshTaskID: UUID?
+    private var subscriptionValidationAttemptedScopes:
+        Set<CloudDatabaseScope> = []
     private var repositoryMutationGenerations: [String: Int] = [:]
     private var repositoryMutationInFlightCounts: [String: Int] = [:]
     private var repositoriesPendingRefreshAfterMutation: Set<String> = []
@@ -1382,6 +1385,7 @@ final class AppStore {
             return
         }
 
+        subscriptionValidationAttemptedScopes.removeAll()
         for index in repositories.indices {
             repositories[index].subscriptionConfigurationVersion = nil
             repositories[index].subscriptionValidatedAt = nil
@@ -2534,8 +2538,14 @@ final class AppStore {
                try outboxStore.load()?.generation == outbox.generation {
                 try outboxStore.remove()
             }
+            SyncDiagnostics.logger.info(
+                "CloudKit repository upload completed and its durable receipt was committed."
+            )
             await ensureRepositorySubscriptions()
         } catch CloudRepositoryError.repositoryConflict(let serverRecordChangeTag) {
+            SyncDiagnostics.logger.error(
+                "CloudKit repository upload paused because the server baseline changed."
+            )
             markCloudUploadConflict(
                 for: repositoryID,
                 serverRecordChangeTag: serverRecordChangeTag
@@ -2547,6 +2557,9 @@ final class AppStore {
                 )
             )
         } catch {
+            SyncDiagnostics.logger.error(
+                "CloudKit repository upload failed and remains in the durable outbox: \(String(describing: error), privacy: .public)"
+            )
             _ = recordSharedCloudThrottleIfNeeded(for: error)
         }
     }
@@ -3363,53 +3376,65 @@ final class AppStore {
         }
 
         let validationCutoff = now().addingTimeInterval(-Self.subscriptionRevalidationInterval)
-        let cloudReferences = repositories.filter { $0.descriptor.isCloudBacked }
-        var ensuredSharedDatabaseSubscription = false
+        let referencesNeedingValidation = repositories.filter { reference in
+            guard reference.descriptor.isCloudBacked else {
+                return false
+            }
+            return reference.subscriptionConfigurationVersion !=
+                    Self.subscriptionConfigurationVersion ||
+                (reference.subscriptionValidatedAt ?? .distantPast) <
+                    validationCutoff
+        }
         var didUpdateCatalog = false
 
-        for reference in cloudReferences {
-            let isConfigurationCurrent =
-                reference.subscriptionConfigurationVersion == Self.subscriptionConfigurationVersion &&
-                (reference.subscriptionValidatedAt ?? .distantPast) >= validationCutoff
-            if isConfigurationCurrent {
-                continue
-            }
-
-            let scope: CloudDatabaseScope
-            switch reference.descriptor.role {
-            case .local:
-                continue
-            case .owner:
-                scope = .privateDatabase
-            case .editor, .viewer:
-                guard !ensuredSharedDatabaseSubscription else {
-                    continue
+        let validationGroups: [(CloudDatabaseScope, [RepositoryReference])] = [
+            (
+                .privateDatabase,
+                referencesNeedingValidation.filter {
+                    $0.descriptor.role == .owner
                 }
-                ensuredSharedDatabaseSubscription = true
-                scope = .sharedDatabase
-            }
+            ),
+            (
+                .sharedDatabase,
+                referencesNeedingValidation.filter {
+                    $0.descriptor.role == .editor ||
+                        $0.descriptor.role == .viewer
+                }
+            )
+        ]
 
+        for (scope, references) in validationGroups
+        where !references.isEmpty &&
+            !subscriptionValidationAttemptedScopes.contains(scope) {
+            subscriptionValidationAttemptedScopes.insert(scope)
             do {
-                try await cloudService.ensureRepositorySubscription(using: reference.descriptor)
-                if scope == .privateDatabase {
-                    if let index = repositories.firstIndex(where: {
-                        $0.id == reference.id
-                    }) {
-                        repositories[index].subscriptionConfigurationVersion =
-                            Self.subscriptionConfigurationVersion
-                        repositories[index].subscriptionValidatedAt = now()
-                    }
-                } else {
-                    for index in repositories.indices
-                    where repositoryReference(at: index, belongsTo: scope) {
-                        repositories[index].subscriptionConfigurationVersion =
-                            Self.subscriptionConfigurationVersion
-                        repositories[index].subscriptionValidatedAt = now()
-                    }
+                try await cloudService.ensureRepositorySubscriptions(
+                    using: references.map(\.descriptor)
+                )
+                let validatedRepositoryIDs = Set(references.map(\.id))
+                for index in repositories.indices
+                where validatedRepositoryIDs.contains(repositories[index].id) {
+                    repositories[index].subscriptionConfigurationVersion =
+                        Self.subscriptionConfigurationVersion
+                    repositories[index].subscriptionValidatedAt = now()
                 }
+                let scopeName = scope == .privateDatabase
+                    ? "private"
+                    : "shared"
+                SyncDiagnostics.logger.info(
+                    "Validated stable \(scopeName, privacy: .public) CloudKit subscriptions for \(references.count, privacy: .public) repositories."
+                )
+                subscriptionValidationAttemptedScopes.remove(scope)
                 didUpdateCatalog = true
             } catch {
+                let scopeName = scope == .privateDatabase
+                    ? "private"
+                    : "shared"
+                SyncDiagnostics.logger.error(
+                    "Stable \(scopeName, privacy: .public) CloudKit subscription repair failed: \(String(describing: error), privacy: .public)"
+                )
                 if recordSharedCloudThrottleIfNeeded(for: error) != nil {
+                    subscriptionValidationAttemptedScopes.remove(scope)
                     break
                 }
             }
@@ -3417,16 +3442,6 @@ final class AppStore {
 
         if didUpdateCatalog {
             try? persistRepositoryCatalog()
-        }
-    }
-
-    private func repositoryReference(at index: Int, belongsTo scope: CloudDatabaseScope) -> Bool {
-        switch scope {
-        case .privateDatabase:
-            return repositories[index].descriptor.role == .owner
-        case .sharedDatabase:
-            let role = repositories[index].descriptor.role
-            return role == .editor || role == .viewer
         }
     }
 
@@ -3717,7 +3732,13 @@ final class AppStore {
             trigger: nil
         )
 
-        try? await UNUserNotificationCenter.current().add(request)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            SyncDiagnostics.logger.error(
+                "Failed to enqueue a local shared-update notification: \(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     private func clearApplicationBadge() {

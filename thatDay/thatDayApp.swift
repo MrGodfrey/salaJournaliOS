@@ -1,6 +1,7 @@
 import BackgroundTasks
 import CloudKit
 import Combine
+import OSLog
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -100,12 +101,40 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        SyncDiagnostics.logger.info(
+            "APNs registration succeeded with a \(deviceToken.count, privacy: .public)-byte token."
+        )
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: any Error
+    ) {
+        SyncDiagnostics.logger.error(
+            "APNs registration failed: \(String(describing: error), privacy: .public)"
+        )
+    }
+
     func applicationDidEnterBackground(_ application: UIApplication) {
         guard !ProcessInfo.processInfo.isRunningUITests else {
             return
         }
 
         SharedRepositoryRefreshScheduler.shared.schedule()
+    }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        guard !ProcessInfo.processInfo.isRunningUITests else {
+            return
+        }
+
+        // Registration is idempotent. Retrying on activation recovers from a
+        // transient APNs registration failure without requiring a reinstall.
+        application.registerForRemoteNotifications()
     }
 
     func application(
@@ -130,6 +159,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
+        SyncDiagnostics.logger.info(
+            "Received a remote notification and started CloudKit background processing."
+        )
         let completion = BackgroundFetchCompletion(handler: completionHandler)
         let syncTask = Task { @MainActor in
             let result = await RepositoryRemoteChangeCenter.shared.processRemoteNotification(userInfo)
