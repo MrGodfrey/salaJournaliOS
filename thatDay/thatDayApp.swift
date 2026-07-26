@@ -1,3 +1,4 @@
+import BackgroundTasks
 import CloudKit
 import Combine
 import SwiftUI
@@ -10,7 +11,6 @@ struct thatDayApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store: AppStore
     @StateObject private var cloudShareDeliveryCenter = CloudShareDeliveryCenter.shared
-    @StateObject private var repositoryRemoteChangeCenter = RepositoryRemoteChangeCenter.shared
     @StateObject private var notificationRouteCenter = NotificationRouteCenter.shared
 
     init() {
@@ -25,18 +25,33 @@ struct thatDayApp: App {
         }
 
         let referenceDate = AppStore.referenceDate(from: processInfo.environment)
-        _store = State(
-            initialValue: AppStore(
-                libraryStore: libraryStore,
-                cloudService: CloudRepositoryService(
-                    containerIdentifier: processInfo.environment["THATDAY_CLOUDKIT_CONTAINER"] ?? "iCloud.yu.thatDay"
-                ),
-                now: { referenceDate ?? Date() },
-                setApplicationBadgeCount: processInfo.isRunningUITests ? { _ in } : { badgeCount in
-                    UNUserNotificationCenter.current().setBadgeCount(badgeCount) { _ in }
-                }
-            )
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: CloudRepositoryService(
+                containerIdentifier: processInfo.environment["THATDAY_CLOUDKIT_CONTAINER"] ?? "iCloud.yu.thatDay",
+                changeTokenStoreURL: libraryStore.rootURL.appendingPathComponent(
+                    "cloudkit-change-tokens",
+                    isDirectory: true
+                )
+            ),
+            now: { referenceDate ?? Date() },
+            scheduleBackgroundRefreshAfter: { deadline in
+                SharedRepositoryRefreshScheduler.shared.schedule(
+                    notBefore: deadline
+                )
+            },
+            setApplicationBadgeCount: processInfo.isRunningUITests ? { _ in } : { badgeCount in
+                UNUserNotificationCenter.current().setBadgeCount(badgeCount) { _ in }
+            }
         )
+        RepositoryRemoteChangeCenter.shared.installHandler { target in
+            if let target {
+                return await store.handleRemoteRepositoryChange(target, trigger: .push)
+            }
+
+            return await store.handleRemoteRepositoryChange(nil, trigger: .backgroundRecovery)
+        }
+        _store = State(initialValue: store)
     }
 
     var body: some Scene {
@@ -48,14 +63,6 @@ struct thatDayApp: App {
                     for metadata in cloudShareDeliveryCenter.drainPendingMetadata() {
                         await store.acceptShare(metadata: metadata)
                     }
-                }
-                .task(id: repositoryRemoteChangeCenter.deliverySequence) {
-                    let pendingUserInfos = repositoryRemoteChangeCenter.drainPendingUserInfos()
-                    guard !pendingUserInfos.isEmpty else {
-                        return
-                    }
-
-                    await store.refreshSharedRepositories(trigger: .push)
                 }
                 .task(id: notificationRouteCenter.deliverySequence) {
                     for route in notificationRouteCenter.drainPendingRoutes() {
@@ -70,6 +77,11 @@ struct thatDayApp: App {
                 .onReceive(NotificationCenter.default.publisher(for: Notification.Name.NSSystemTimeZoneDidChange)) { _ in
                     store.systemTimeZoneDidChange()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
+                    Task {
+                        await store.handleCloudAccountChange()
+                    }
+                }
         }
     }
 }
@@ -79,11 +91,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        SharedRepositoryRefreshScheduler.shared.register()
         UNUserNotificationCenter.current().delegate = self
         if !ProcessInfo.processInfo.isRunningUITests {
+            SharedRepositoryRefreshScheduler.shared.schedule()
             application.registerForRemoteNotifications()
         }
         return true
+    }
+
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        guard !ProcessInfo.processInfo.isRunningUITests else {
+            return
+        }
+
+        SharedRepositoryRefreshScheduler.shared.schedule()
     }
 
     func application(
@@ -108,9 +130,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
+        let completion = BackgroundFetchCompletion(handler: completionHandler)
+        let syncTask = Task { @MainActor in
+            let result = await RepositoryRemoteChangeCenter.shared.processRemoteNotification(userInfo)
+            completion.finish(with: result)
+        }
         Task { @MainActor in
-            RepositoryRemoteChangeCenter.shared.enqueue(userInfo)
-            completionHandler(.newData)
+            do {
+                try await Task.sleep(for: .seconds(25))
+            } catch {
+                return
+            }
+            syncTask.cancel()
+            completion.finish(with: .failed)
         }
     }
 
@@ -138,6 +170,107 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             CloudShareDeliveryCenter.shared.enqueue(metadata)
         }
+    }
+}
+
+@MainActor
+private final class BackgroundFetchCompletion {
+    private var handler: ((UIBackgroundFetchResult) -> Void)?
+
+    init(handler: @escaping (UIBackgroundFetchResult) -> Void) {
+        self.handler = handler
+    }
+
+    func finish(with result: UIBackgroundFetchResult) {
+        guard let handler else {
+            return
+        }
+
+        self.handler = nil
+        handler(result)
+    }
+}
+
+@MainActor
+private final class SharedRepositoryRefreshScheduler {
+    static let shared = SharedRepositoryRefreshScheduler()
+    static let taskIdentifier = "yu.thatDay.shared-repository-refresh"
+
+    private static let minimumRefreshDelay: TimeInterval = 60 * 60
+
+    private init() {}
+
+    func register() {
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: Self.taskIdentifier,
+            using: .main
+        ) { [weak self] task in
+            guard let self,
+                  let refreshTask = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+
+            self.run(refreshTask)
+        }
+    }
+
+    func schedule(notBefore deadline: Date? = nil) {
+        let request = BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)
+        let defaultEarliestBeginDate = Date(
+            timeIntervalSinceNow: Self.minimumRefreshDelay
+        )
+        request.earliestBeginDate = max(
+            defaultEarliestBeginDate,
+            deadline ?? .distantPast
+        )
+        BGTaskScheduler.shared.cancel(
+            taskRequestWithIdentifier: Self.taskIdentifier
+        )
+        try? BGTaskScheduler.shared.submit(request)
+    }
+
+    private func run(_ backgroundTask: BGAppRefreshTask) {
+        // Submit the successor before doing any work. If the process is killed
+        // during this refresh, iOS still has a future recovery request.
+        schedule()
+        let completion = BackgroundRefreshCompletion(task: backgroundTask)
+        let refreshOperation = Task { @MainActor in
+            await RepositoryRemoteChangeCenter.shared.performRecoveryRefresh()
+        }
+        backgroundTask.expirationHandler = {
+            Task { @MainActor in
+                refreshOperation.cancel()
+                completion.finish(success: false)
+            }
+        }
+
+        Task { @MainActor in
+            let result = await refreshOperation.value
+            backgroundTask.expirationHandler = nil
+            completion.finish(
+                success: !refreshOperation.isCancelled && result != .failed
+            )
+        }
+    }
+}
+
+@MainActor
+private final class BackgroundRefreshCompletion {
+    private let task: BGAppRefreshTask
+    private var didFinish = false
+
+    init(task: BGAppRefreshTask) {
+        self.task = task
+    }
+
+    func finish(success: Bool) {
+        guard !didFinish else {
+            return
+        }
+
+        didFinish = true
+        task.setTaskCompleted(success: success)
     }
 }
 

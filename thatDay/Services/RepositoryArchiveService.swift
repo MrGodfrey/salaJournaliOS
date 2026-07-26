@@ -24,19 +24,63 @@ private nonisolated struct RepositoryArchiveManifest: Codable {
     var repositoryName: String
 }
 
+nonisolated struct PreparedRepositoryImport: Sendable {
+    let repositoryStore: LocalRepositoryStore
+    let snapshot: RepositorySnapshot
+}
+
+private nonisolated struct RepositoryImportTransaction: Codable {
+    static let currentVersion = 1
+
+    var version = currentVersion
+    var destinationPath: String
+    var stagingPath: String
+    var backupPath: String
+}
+
 nonisolated struct RepositoryArchiveService {
     private let extractArchive: (URL, URL) throws -> Void
     private let startAccessingSecurityScopedResource: (URL) -> Bool
     private let stopAccessingSecurityScopedResource: (URL) -> Void
+    private let cleanupImportTransactionArtifacts:
+        (_ destinationURL: URL, _ stagingURL: URL, _ backupURL: URL, _ keepingDestination: Bool) throws -> Void
 
     init(
         extractArchive: @escaping (URL, URL) throws -> Void = SimpleZipArchive.extract,
         startAccessingSecurityScopedResource: @escaping (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
-        stopAccessingSecurityScopedResource: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
+        stopAccessingSecurityScopedResource: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() },
+        cleanupImportTransactionArtifacts: @escaping (
+            _ destinationURL: URL,
+            _ stagingURL: URL,
+            _ backupURL: URL,
+            _ keepingDestination: Bool
+        ) throws -> Void = { destinationURL, stagingURL, backupURL, keepingDestination in
+            let fileManager = FileManager.default
+            for url in [stagingURL, backupURL] {
+                guard fileManager.fileExists(atPath: url.path) else {
+                    continue
+                }
+                try fileManager.removeItem(at: url)
+            }
+            if !keepingDestination,
+               fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+            let transactionURL = destinationURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    ".\(destinationURL.lastPathComponent)-import-transaction.json"
+                )
+            if fileManager.fileExists(atPath: transactionURL.path) {
+                try fileManager.removeItem(at: transactionURL)
+            }
+        }
     ) {
         self.extractArchive = extractArchive
         self.startAccessingSecurityScopedResource = startAccessingSecurityScopedResource
         self.stopAccessingSecurityScopedResource = stopAccessingSecurityScopedResource
+        self.cleanupImportTransactionArtifacts =
+            cleanupImportTransactionArtifacts
     }
 
     func exportArchive(
@@ -102,15 +146,46 @@ nonisolated struct RepositoryArchiveService {
         preserving descriptor: RepositoryDescriptor,
         progress: @escaping @Sendable (_ totalFiles: Int, _ completedFiles: Int) async -> Void
     ) async throws -> RepositorySnapshot {
+        let preparedImport = try await prepareImportArchive(
+            from: zipURL,
+            nextTo: repositoryStore,
+            preserving: descriptor,
+            progress: progress
+        )
+        do {
+            return try installPreparedImport(
+                preparedImport,
+                replacing: repositoryStore
+            )
+        } catch {
+            try? discardPreparedImport(preparedImport)
+            throw error
+        }
+    }
+
+    func prepareImportArchive(
+        from zipURL: URL,
+        nextTo repositoryStore: LocalRepositoryStore,
+        preserving descriptor: RepositoryDescriptor,
+        progress: @escaping @Sendable (_ totalFiles: Int, _ completedFiles: Int) async -> Void
+    ) async throws -> PreparedRepositoryImport {
         let fileManager = FileManager.default
         let unzipRoot = fileManager.temporaryDirectory
             .appendingPathComponent("thatDay-import-\(UUID().uuidString)", isDirectory: true)
+        let stagingRoot = repositoryStore.rootURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                ".\(repositoryStore.rootURL.lastPathComponent)-import-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let stagingStore = LocalRepositoryStore(rootURL: stagingRoot)
         try fileManager.createDirectory(at: unzipRoot, withIntermediateDirectories: true)
         let didStartAccessingSecurityScopedResource = startAccessingSecurityScopedResource(zipURL)
         defer {
             if didStartAccessingSecurityScopedResource {
                 stopAccessingSecurityScopedResource(zipURL)
             }
+            try? fileManager.removeItem(at: unzipRoot)
         }
 
         do {
@@ -131,34 +206,170 @@ nonisolated struct RepositoryArchiveService {
         let totalFiles = max(sourceFiles.count, 1)
         var completedFiles = 0
 
-        try repositoryStore.resetContents()
+        do {
+            try stagingStore.resetContents()
 
-        let destinationFiles = try sourceFiles.map { sourceURL in
-            (
-                source: sourceURL,
-                destination: repositoryStore.rootURL.appendingPathComponent(
-                    try relativePath(for: sourceURL, inside: repositoryDirectory)
+            let destinationFiles = try sourceFiles.map { sourceURL in
+                (
+                    source: sourceURL,
+                    destination: stagingStore.rootURL.appendingPathComponent(
+                        try relativePath(for: sourceURL, inside: repositoryDirectory)
+                    )
                 )
-            )
-        }
-
-        for pair in destinationFiles {
-            try fileManager.createDirectory(at: pair.destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if fileManager.fileExists(atPath: pair.destination.path) {
-                try fileManager.removeItem(at: pair.destination)
             }
-            try fileManager.copyItem(at: pair.source, to: pair.destination)
-            completedFiles += 1
-            await progress(totalFiles, completedFiles)
+
+            for pair in destinationFiles {
+                try fileManager.createDirectory(
+                    at: pair.destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                if fileManager.fileExists(atPath: pair.destination.path) {
+                    try fileManager.removeItem(at: pair.destination)
+                }
+                try fileManager.copyItem(at: pair.source, to: pair.destination)
+                completedFiles += 1
+                await progress(totalFiles, completedFiles)
+            }
+
+            try stagingStore.saveDescriptor(descriptor)
+
+            guard let snapshot = try stagingStore.loadSnapshot() else {
+                throw RepositoryArchiveError.invalidArchive
+            }
+            try validateReferencedImages(
+                in: snapshot,
+                repositoryStore: stagingStore
+            )
+            return PreparedRepositoryImport(
+                repositoryStore: stagingStore,
+                snapshot: snapshot
+            )
+        } catch {
+            try? stagingStore.reset()
+            throw error
+        }
+    }
+
+    func installPreparedImport(
+        _ preparedImport: PreparedRepositoryImport,
+        replacing repositoryStore: LocalRepositoryStore
+    ) throws -> RepositorySnapshot {
+        let fileManager = FileManager.default
+        let destinationURL = repositoryStore.rootURL.standardizedFileURL
+        let stagingURL = preparedImport.repositoryStore.rootURL.standardizedFileURL
+        guard stagingURL.deletingLastPathComponent() ==
+                destinationURL.deletingLastPathComponent(),
+              stagingURL != destinationURL else {
+            throw RepositoryArchiveError.invalidRepositoryPath
         }
 
-        try repositoryStore.saveDescriptor(descriptor)
+        let backupURL = destinationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                ".\(destinationURL.lastPathComponent)-backup-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let transaction = RepositoryImportTransaction(
+            destinationPath: destinationURL.path,
+            stagingPath: stagingURL.path,
+            backupPath: backupURL.path
+        )
+        try saveImportTransaction(transaction, for: repositoryStore)
 
-        guard let snapshot = try repositoryStore.loadSnapshot() else {
-            throw RepositoryArchiveError.invalidArchive
+        do {
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                _ = try fileManager.replaceItemAt(
+                    destinationURL,
+                    withItemAt: stagingURL,
+                    backupItemName: backupURL.lastPathComponent
+                )
+            } else {
+                try fileManager.moveItem(at: stagingURL, to: destinationURL)
+            }
+            guard let installedSnapshot = try repositoryStore.loadSnapshot()
+            else {
+                throw RepositoryArchiveError.invalidArchive
+            }
+            // The directory replacement and snapshot validation are the commit
+            // point. Cleanup is deliberately best-effort here: if it fails, the
+            // durable transaction marker lets startup finish it without making
+            // the caller roll back an import that is already live on disk.
+            try? removeImportTransactionArtifacts(
+                transaction,
+                keepingDestination: true
+            )
+            return installedSnapshot
+        } catch {
+            try? recoverInterruptedImport(for: repositoryStore)
+            throw error
+        }
+    }
+
+    func discardPreparedImport(
+        _ preparedImport: PreparedRepositoryImport
+    ) throws {
+        try preparedImport.repositoryStore.reset()
+    }
+
+    func recoverInterruptedImport(
+        for repositoryStore: LocalRepositoryStore
+    ) throws {
+        let transactionURL = importTransactionURL(for: repositoryStore)
+        guard FileManager.default.fileExists(atPath: transactionURL.path) else {
+            return
         }
 
-        return snapshot
+        let decoder = JSONDecoder()
+        let transaction = try decoder.decode(
+            RepositoryImportTransaction.self,
+            from: Data(contentsOf: transactionURL)
+        )
+        let expectedDestinationURL = repositoryStore.rootURL.standardizedFileURL
+        guard transaction.version == RepositoryImportTransaction.currentVersion,
+              URL(fileURLWithPath: transaction.destinationPath)
+                .standardizedFileURL == expectedDestinationURL else {
+            throw RepositoryArchiveError.invalidRepositoryPath
+        }
+
+        let fileManager = FileManager.default
+        let stagingURL = URL(fileURLWithPath: transaction.stagingPath)
+            .standardizedFileURL
+        let backupURL = URL(fileURLWithPath: transaction.backupPath)
+            .standardizedFileURL
+        let expectedParentURL = expectedDestinationURL
+            .deletingLastPathComponent()
+        guard stagingURL.deletingLastPathComponent() == expectedParentURL,
+              backupURL.deletingLastPathComponent() == expectedParentURL,
+              stagingURL != expectedDestinationURL,
+              backupURL != expectedDestinationURL,
+              stagingURL.lastPathComponent.hasPrefix(
+                ".\(expectedDestinationURL.lastPathComponent)-import-"
+              ),
+              backupURL.lastPathComponent.hasPrefix(
+                ".\(expectedDestinationURL.lastPathComponent)-backup-"
+              ) else {
+            throw RepositoryArchiveError.invalidRepositoryPath
+        }
+        if !fileManager.fileExists(atPath: expectedDestinationURL.path) {
+            if fileManager.fileExists(atPath: stagingURL.path) {
+                try fileManager.moveItem(
+                    at: stagingURL,
+                    to: expectedDestinationURL
+                )
+            } else if fileManager.fileExists(atPath: backupURL.path) {
+                try fileManager.moveItem(
+                    at: backupURL,
+                    to: expectedDestinationURL
+                )
+            } else {
+                throw RepositoryArchiveError.invalidArchive
+            }
+        }
+
+        try removeImportTransactionArtifacts(
+            transaction,
+            keepingDestination: true
+        )
     }
 
     private func locateRepositoryDirectory(in unzipRoot: URL) throws -> URL {
@@ -181,6 +392,68 @@ nonisolated struct RepositoryArchiveService {
         }
 
         throw RepositoryArchiveError.invalidArchive
+    }
+
+    private func validateReferencedImages(
+        in snapshot: RepositorySnapshot,
+        repositoryStore: LocalRepositoryStore
+    ) throws {
+        for entry in snapshot.entries {
+            guard let reference = entry.imageReference?.trimmed.nilIfEmpty
+            else {
+                continue
+            }
+            if let url = URL(string: reference),
+               let scheme = url.scheme?.lowercased(),
+               scheme == "http" || scheme == "https" {
+                continue
+            }
+            guard repositoryStore.imageURL(for: reference) != nil else {
+                throw RepositoryArchiveError.invalidArchive
+            }
+        }
+    }
+
+    private func importTransactionURL(
+        for repositoryStore: LocalRepositoryStore
+    ) -> URL {
+        repositoryStore.rootURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                ".\(repositoryStore.rootURL.lastPathComponent)-import-transaction.json"
+            )
+    }
+
+    private func saveImportTransaction(
+        _ transaction: RepositoryImportTransaction,
+        for repositoryStore: LocalRepositoryStore
+    ) throws {
+        let transactionURL = importTransactionURL(for: repositoryStore)
+        try FileManager.default.createDirectory(
+            at: transactionURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(transaction).write(
+            to: transactionURL,
+            options: .atomic
+        )
+    }
+
+    private func removeImportTransactionArtifacts(
+        _ transaction: RepositoryImportTransaction,
+        keepingDestination: Bool
+    ) throws {
+        let destinationURL = URL(fileURLWithPath: transaction.destinationPath)
+        let stagingURL = URL(fileURLWithPath: transaction.stagingPath)
+        let backupURL = URL(fileURLWithPath: transaction.backupPath)
+        try cleanupImportTransactionArtifacts(
+            destinationURL,
+            stagingURL,
+            backupURL,
+            keepingDestination
+        )
     }
 
     private func relativePath(for fileURL: URL, inside rootURL: URL) throws -> String {

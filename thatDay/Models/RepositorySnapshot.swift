@@ -8,7 +8,7 @@ nonisolated struct RepositoryImageAsset: Codable, Hashable, Sendable, Identifiab
 }
 
 nonisolated struct RepositorySnapshot: Codable, Hashable, Sendable {
-    static let defaultVersion = 3
+    static let defaultVersion = 4
     static let defaultBlogTags = ["Reading", "Watching", "Game", "Trip", "note"]
 
     var version: Int = RepositorySnapshot.defaultVersion
@@ -17,19 +17,25 @@ nonisolated struct RepositorySnapshot: Codable, Hashable, Sendable {
     var embeddedImages: [RepositoryImageAsset]
     var blogTags: [String]
     var sharedUpdateNotificationScope: SharedUpdateNotificationScope
+    var cloudUploadOperationID: UUID?
+    var imageContentHashes: [String: String]
 
     init(
         entries: [EntryRecord],
         updatedAt: Date = Date(),
         embeddedImages: [RepositoryImageAsset] = [],
         blogTags: [String] = RepositorySnapshot.defaultBlogTags,
-        sharedUpdateNotificationScope: SharedUpdateNotificationScope = .all
+        sharedUpdateNotificationScope: SharedUpdateNotificationScope = .all,
+        cloudUploadOperationID: UUID? = nil,
+        imageContentHashes: [String: String] = [:]
     ) {
         self.entries = entries
         self.updatedAt = updatedAt
         self.embeddedImages = embeddedImages
         self.blogTags = blogTags
         self.sharedUpdateNotificationScope = sharedUpdateNotificationScope
+        self.cloudUploadOperationID = cloudUploadOperationID
+        self.imageContentHashes = imageContentHashes
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -39,6 +45,8 @@ nonisolated struct RepositorySnapshot: Codable, Hashable, Sendable {
         case embeddedImages = "images"
         case blogTags
         case sharedUpdateNotificationScope
+        case cloudUploadOperationID
+        case imageContentHashes
     }
 
     init(from decoder: any Decoder) throws {
@@ -49,6 +57,14 @@ nonisolated struct RepositorySnapshot: Codable, Hashable, Sendable {
         embeddedImages = try container.decodeIfPresent([RepositoryImageAsset].self, forKey: .embeddedImages) ?? []
         blogTags = try container.decodeIfPresent([String].self, forKey: .blogTags) ?? RepositorySnapshot.defaultBlogTags
         sharedUpdateNotificationScope = try container.decodeIfPresent(SharedUpdateNotificationScope.self, forKey: .sharedUpdateNotificationScope) ?? .all
+        cloudUploadOperationID = try container.decodeIfPresent(
+            UUID.self,
+            forKey: .cloudUploadOperationID
+        )
+        imageContentHashes = try container.decodeIfPresent(
+            [String: String].self,
+            forKey: .imageContentHashes
+        ) ?? [:]
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -58,6 +74,16 @@ nonisolated struct RepositorySnapshot: Codable, Hashable, Sendable {
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encode(blogTags, forKey: .blogTags)
         try container.encode(sharedUpdateNotificationScope, forKey: .sharedUpdateNotificationScope)
+        try container.encodeIfPresent(
+            cloudUploadOperationID,
+            forKey: .cloudUploadOperationID
+        )
+        if !imageContentHashes.isEmpty {
+            try container.encode(
+                imageContentHashes,
+                forKey: .imageContentHashes
+            )
+        }
         if !embeddedImages.isEmpty {
             try container.encode(embeddedImages, forKey: .embeddedImages)
         }
@@ -69,7 +95,9 @@ nonisolated struct RepositorySnapshot: Codable, Hashable, Sendable {
             updatedAt: updatedAt,
             embeddedImages: [],
             blogTags: blogTags,
-            sharedUpdateNotificationScope: sharedUpdateNotificationScope
+            sharedUpdateNotificationScope: sharedUpdateNotificationScope,
+            cloudUploadOperationID: cloudUploadOperationID,
+            imageContentHashes: imageContentHashes
         )
     }
 

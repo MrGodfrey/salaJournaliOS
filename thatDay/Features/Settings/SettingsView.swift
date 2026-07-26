@@ -329,6 +329,10 @@ struct SettingsView: View {
                 }
             ))
 
+            Text("Background sync stays enabled even when alerts are off.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
             Picker("Personal Push Updates", selection: Binding(
                 get: { store.sharedUpdateNotificationScope },
                 set: { scope in

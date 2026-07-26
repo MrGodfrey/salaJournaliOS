@@ -3,17 +3,82 @@ import CryptoKit
 import Foundation
 import UIKit
 
-struct RepositorySnapshotMetadata: Equatable, Sendable {
+nonisolated struct RepositorySnapshotMetadata: Equatable, Sendable {
     var updatedAt: Date
     var entryCount: Int
+    var serverModifiedAt: Date? = nil
+    var recordChangeTag: String? = nil
+}
+
+nonisolated struct SavedRepositorySnapshot: Equatable, Sendable {
+    var descriptor: RepositoryDescriptor
+    var serverModifiedAt: Date?
+    var recordChangeTag: String?
+}
+
+nonisolated struct CloudImageMutationPlan: Equatable, Sendable {
+    var assetsToSave: [RepositoryImageAsset]
+    var referencesToInspectBeforeSave: [String]
+    var referencesToDelete: [String]
+}
+
+nonisolated struct CloudRepositoryZoneIdentity: Codable, Hashable, Sendable {
+    var ownerName: String
+    var zoneName: String
+
+    init(ownerName: String, zoneName: String) {
+        self.ownerName = ownerName
+        self.zoneName = zoneName
+    }
+
+    init(zoneID: CKRecordZone.ID) {
+        self.init(ownerName: zoneID.ownerName, zoneName: zoneID.zoneName)
+    }
+}
+
+nonisolated enum CloudRepositoryZoneDeletionReason: String, Codable, Hashable, Sendable {
+    case deleted
+    case purged
+    case encryptedDataReset
+}
+
+nonisolated struct CloudRepositoryZoneDeletion: Codable, Hashable, Sendable {
+    var zoneID: CloudRepositoryZoneIdentity
+    var reason: CloudRepositoryZoneDeletionReason
+}
+
+nonisolated struct CloudRepositoryDatabaseChanges: Equatable, Sendable {
+    var modifiedZoneIDs: Set<CloudRepositoryZoneIdentity> = []
+    var deletedZones: Set<CloudRepositoryZoneDeletion> = []
 }
 
 protocol CloudRepositoryServicing {
     func loadSnapshotMetadata(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshotMetadata
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot
-    func saveSnapshot(_ snapshot: RepositorySnapshot, using descriptor: RepositoryDescriptor) async throws -> RepositoryDescriptor
-    func shareURL(using descriptor: RepositoryDescriptor, snapshot: RepositorySnapshot) async throws -> URL
+    func loadSnapshot(
+        using descriptor: RepositoryDescriptor,
+        availableImageContentHashes: [String: String]
+    ) async throws -> RepositorySnapshot
+    func saveSnapshot(
+        _ snapshot: RepositorySnapshot,
+        using descriptor: RepositoryDescriptor,
+        expectedRecordChangeTag: String?,
+        acceptedPredecessorOperationIDs: Set<UUID>
+    ) async throws -> SavedRepositorySnapshot
+    func recreateSnapshotAfterEncryptedDataReset(
+        _ snapshot: RepositorySnapshot,
+        using descriptor: RepositoryDescriptor,
+        acceptedPredecessorOperationIDs: Set<UUID>
+    ) async throws -> SavedRepositorySnapshot
     func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws
+    func pendingRepositoryZoneChanges(
+        in scope: CloudDatabaseScope
+    ) async throws -> CloudRepositoryDatabaseChanges
+    func acknowledgeRepositoryZoneChanges(
+        _ changes: CloudRepositoryDatabaseChanges,
+        in scope: CloudDatabaseScope
+    ) async throws
+    func resetRemoteChangeTracking() async throws
     @MainActor
     func makeSharingController(
         using descriptor: RepositoryDescriptor,
@@ -24,10 +89,35 @@ protocol CloudRepositoryServicing {
     func acceptShare(metadata: CKShare.Metadata) async throws -> AcceptedSharedRepository
 }
 
+extension CloudRepositoryServicing {
+    func loadSnapshot(
+        using descriptor: RepositoryDescriptor,
+        availableImageContentHashes: [String: String]
+    ) async throws -> RepositorySnapshot {
+        try await loadSnapshot(using: descriptor)
+    }
+}
+
 struct AcceptedSharedRepository: Sendable {
     var descriptor: RepositoryDescriptor
     var snapshot: RepositorySnapshot
     var displayName: String?
+    var serverModifiedAt: Date?
+    var recordChangeTag: String?
+
+    init(
+        descriptor: RepositoryDescriptor,
+        snapshot: RepositorySnapshot,
+        displayName: String?,
+        serverModifiedAt: Date? = nil,
+        recordChangeTag: String? = nil
+    ) {
+        self.descriptor = descriptor
+        self.snapshot = snapshot
+        self.displayName = displayName
+        self.serverModifiedAt = serverModifiedAt
+        self.recordChangeTag = recordChangeTag
+    }
 }
 
 enum CloudRepositoryError: LocalizedError {
@@ -35,6 +125,8 @@ enum CloudRepositoryError: LocalizedError {
     case shareLinkInvalid
     case repositoryNotFound
     case repositoryLocked
+    case repositoryConflict(serverRecordChangeTag: String?)
+    case atomicSaveLimitExceeded
     case invalidRepositoryData
     case shareUnavailable
 
@@ -48,6 +140,10 @@ enum CloudRepositoryError: LocalizedError {
             L10n.string("No data was found for the current shared repository.")
         case .repositoryLocked:
             L10n.string("The current shared repository is read-only and cannot be changed.")
+        case .repositoryConflict:
+            L10n.string("This repository changed in iCloud before the pending local update could upload. Both copies were kept; automatic upload is paused to prevent data loss.")
+        case .atomicSaveLimitExceeded:
+            L10n.string("The repository update is too large to upload safely in one atomic CloudKit operation.")
         case .invalidRepositoryData:
             L10n.string("The repository data in CloudKit could not be recognized.")
         case .shareUnavailable:
@@ -62,23 +158,144 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         static let rootRecordName = "RepositoryRoot"
         static let recordType = "RepositoryRoot"
         static let imageRecordType = "RepositoryImageAsset"
-        static let sharedDatabaseSubscriptionID = "repository-updates-shared-database"
+        static let privateDatabaseSubscriptionID = "repository-root-updates-private-v2"
+        static let sharedDatabaseSubscriptionID = "repository-root-updates-shared-v2"
+        static let legacySharedDatabaseSubscriptionID = "repository-updates-shared-database"
         static let updatedAtKey: CKRecord.FieldKey = "updatedAt"
         static let entryCountKey: CKRecord.FieldKey = "entryCount"
         static let payloadKey: CKRecord.FieldKey = "payload"
         static let referenceKey: CKRecord.FieldKey = "reference"
         static let contentHashKey: CKRecord.FieldKey = "contentHash"
         static let recordBatchSize = 50
+        static let maximumAtomicRecordsPerSave = 400
     }
 
     private let container: CKContainer
     private let privateDatabase: CKDatabase
     private let sharedDatabase: CKDatabase
+    private let changeTokenStore: CloudChangeTokenStore?
 
-    init(containerIdentifier: String) {
+    init(containerIdentifier: String, changeTokenStoreURL: URL? = nil) {
         container = CKContainer(identifier: containerIdentifier)
         privateDatabase = container.privateCloudDatabase
         sharedDatabase = container.sharedCloudDatabase
+        if let changeTokenStoreURL {
+            changeTokenStore = CloudChangeTokenStore(directoryURL: changeTokenStoreURL)
+        } else {
+            changeTokenStore = nil
+        }
+    }
+
+    nonisolated static func imageMutationPlan(
+        for snapshot: RepositorySnapshot,
+        replacing previousSnapshot: RepositorySnapshot?
+    ) throws -> CloudImageMutationPlan {
+        let currentReferences = localImageReferences(in: snapshot)
+        let previousReferences = previousSnapshot.map {
+            localImageReferences(in: $0)
+        } ?? []
+        let assetsByReference = Dictionary(
+            snapshot.embeddedImages.compactMap { asset -> (String, RepositoryImageAsset)? in
+                guard let reference = localImageReference(asset.reference) else {
+                    return nil
+                }
+                return (
+                    reference,
+                    RepositoryImageAsset(reference: reference, data: asset.data)
+                )
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let currentContentHashes = try imageContentHashes(in: snapshot)
+        let referencesToSave = Set(
+            currentReferences.filter { reference in
+                guard previousReferences.contains(reference) else {
+                    return true
+                }
+                return previousSnapshot?.imageContentHashes[reference] !=
+                    currentContentHashes[reference]
+            }
+        )
+        guard referencesToSave.isSubset(of: Set(assetsByReference.keys)) else {
+            throw CloudRepositoryError.invalidRepositoryData
+        }
+
+        return CloudImageMutationPlan(
+            assetsToSave: referencesToSave
+                .sorted()
+                .compactMap { assetsByReference[$0] },
+            // Inspect every candidate, including a root-new reference. Older
+            // app versions could leave an orphan image record with the same
+            // deterministic ID after removing it from the root snapshot.
+            referencesToInspectBeforeSave: referencesToSave.sorted(),
+            referencesToDelete: previousReferences
+                .subtracting(currentReferences)
+                .sorted()
+        )
+    }
+
+    nonisolated static func imageReferencesRequiringDownload(
+        in snapshot: RepositorySnapshot,
+        availableImageContentHashes: [String: String]
+    ) -> Set<String> {
+        let referencedImages = localImageReferences(in: snapshot)
+        let embeddedReferences = Set(
+            snapshot.embeddedImages.compactMap {
+                localImageReference($0.reference)
+            }
+        )
+        let reusableReferences = referencedImages.filter { reference in
+            guard let remoteHash = snapshot.imageContentHashes[reference],
+                  let localHash = availableImageContentHashes[reference] else {
+                return false
+            }
+            return remoteHash == localHash
+        }
+        return referencedImages
+            .subtracting(embeddedReferences)
+            .subtracting(reusableReferences)
+    }
+
+    nonisolated static func imageContentHashes(
+        in snapshot: RepositorySnapshot
+    ) throws -> [String: String] {
+        let referencedImages = localImageReferences(in: snapshot)
+        let hashesByReference = Dictionary(
+            snapshot.embeddedImages.compactMap { asset -> (String, String)? in
+                guard let reference = localImageReference(asset.reference) else {
+                    return nil
+                }
+                return (reference, contentHash(for: asset.data))
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        guard referencedImages.isSubset(of: Set(hashesByReference.keys)) else {
+            throw CloudRepositoryError.invalidRepositoryData
+        }
+        return hashesByReference.filter {
+            referencedImages.contains($0.key)
+        }
+    }
+
+    nonisolated static func validatedImageAsset(
+        requestedReference: String,
+        storedReference: String?,
+        recordedContentHash: String?,
+        expectedContentHash: String?,
+        data: Data
+    ) throws -> RepositoryImageAsset {
+        let normalizedStoredReference =
+            localImageReference(storedReference) ?? requestedReference
+        let actualContentHash = contentHash(for: data)
+        guard normalizedStoredReference == requestedReference,
+              recordedContentHash.map({ $0 == actualContentHash }) ?? true,
+              expectedContentHash.map({ $0 == actualContentHash }) ?? true else {
+            throw CloudRepositoryError.invalidRepositoryData
+        }
+        return RepositoryImageAsset(
+            reference: requestedReference,
+            data: data
+        )
     }
 
     func loadSnapshotMetadata(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshotMetadata {
@@ -101,10 +318,38 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         }
 
         let entryCount = record[Constant.entryCountKey] as? Int ?? 0
-        return RepositorySnapshotMetadata(updatedAt: updatedAt, entryCount: entryCount)
+        return RepositorySnapshotMetadata(
+            updatedAt: updatedAt,
+            entryCount: entryCount,
+            serverModifiedAt: record.modificationDate,
+            recordChangeTag: record.recordChangeTag
+        )
     }
 
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot {
+        try await loadSnapshotWithMetadata(
+            using: descriptor,
+            availableImageContentHashes: [:]
+        ).snapshot
+    }
+
+    func loadSnapshot(
+        using descriptor: RepositoryDescriptor,
+        availableImageContentHashes: [String: String]
+    ) async throws -> RepositorySnapshot {
+        try await loadSnapshotWithMetadata(
+            using: descriptor,
+            availableImageContentHashes: availableImageContentHashes
+        ).snapshot
+    }
+
+    private func loadSnapshotWithMetadata(
+        using descriptor: RepositoryDescriptor,
+        availableImageContentHashes: [String: String] = [:]
+    ) async throws -> (
+        snapshot: RepositorySnapshot,
+        metadata: RepositorySnapshotMetadata
+    ) {
         guard let zoneID = descriptor.zoneID else {
             throw CloudRepositoryError.repositoryDescriptorMissing
         }
@@ -123,33 +368,94 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let snapshot = try decoder.decode(RepositorySnapshot.self, from: data)
-        let referencedImages = Self.localImageReferences(in: snapshot)
-        let embeddedReferences = Set(snapshot.embeddedImages.map(\.reference))
-        let missingReferences = referencedImages.subtracting(embeddedReferences)
-
-        guard !missingReferences.isEmpty else {
-            return snapshot
+        let missingReferences = Self.imageReferencesRequiringDownload(
+            in: snapshot,
+            availableImageContentHashes: availableImageContentHashes
+        )
+        let fetchedImages: [RepositoryImageAsset]
+        if missingReferences.isEmpty {
+            fetchedImages = []
+        } else {
+            fetchedImages = try await fetchImageAssets(
+                references: Array(missingReferences).sorted(),
+                expectedContentHashes: snapshot.imageContentHashes,
+                zoneID: zoneID,
+                in: database
+            )
+        }
+        var hydratedImageContentHashes = snapshot.imageContentHashes
+        for asset in fetchedImages {
+            hydratedImageContentHashes[asset.reference] =
+                Self.contentHash(for: asset.data)
         }
 
-        let fetchedImages = try await fetchImageAssets(
-            references: Array(missingReferences).sorted(),
-            zoneID: zoneID,
-            in: database
-        )
-
-        return RepositorySnapshot(
+        let hydratedSnapshot = RepositorySnapshot(
             entries: snapshot.entries,
             updatedAt: snapshot.updatedAt,
             embeddedImages: snapshot.embeddedImages + fetchedImages,
             blogTags: snapshot.blogTags,
-            sharedUpdateNotificationScope: snapshot.sharedUpdateNotificationScope
+            sharedUpdateNotificationScope: snapshot.sharedUpdateNotificationScope,
+            cloudUploadOperationID: snapshot.cloudUploadOperationID,
+            imageContentHashes: hydratedImageContentHashes
+        )
+        let metadata = RepositorySnapshotMetadata(
+            updatedAt: (record[Constant.updatedAtKey] as? Date) ?? snapshot.updatedAt,
+            entryCount: record[Constant.entryCountKey] as? Int ?? snapshot.entries.count,
+            serverModifiedAt: record.modificationDate,
+            recordChangeTag: record.recordChangeTag
+        )
+        return (hydratedSnapshot, metadata)
+    }
+
+    func saveSnapshot(
+        _ snapshot: RepositorySnapshot,
+        using descriptor: RepositoryDescriptor,
+        expectedRecordChangeTag: String?,
+        acceptedPredecessorOperationIDs: Set<UUID> = []
+    ) async throws -> SavedRepositorySnapshot {
+        try await saveSnapshot(
+            snapshot,
+            using: descriptor,
+            expectedRecordChangeTag: expectedRecordChangeTag,
+            acceptedPredecessorOperationIDs: acceptedPredecessorOperationIDs,
+            requiresKnownBaseline: descriptor.role != .local
         )
     }
 
-    func saveSnapshot(_ snapshot: RepositorySnapshot, using descriptor: RepositoryDescriptor) async throws -> RepositoryDescriptor {
+    func recreateSnapshotAfterEncryptedDataReset(
+        _ snapshot: RepositorySnapshot,
+        using descriptor: RepositoryDescriptor,
+        acceptedPredecessorOperationIDs: Set<UUID> = []
+    ) async throws -> SavedRepositorySnapshot {
+        guard descriptor.role == .owner else {
+            throw CloudRepositoryError.repositoryLocked
+        }
+
+        var resetDescriptor = descriptor
+        resetDescriptor.shareRecordName = nil
+        return try await saveSnapshot(
+            snapshot,
+            using: resetDescriptor,
+            expectedRecordChangeTag: nil,
+            acceptedPredecessorOperationIDs: acceptedPredecessorOperationIDs,
+            requiresKnownBaseline: false
+        )
+    }
+
+    private func saveSnapshot(
+        _ snapshot: RepositorySnapshot,
+        using descriptor: RepositoryDescriptor,
+        expectedRecordChangeTag: String?,
+        acceptedPredecessorOperationIDs: Set<UUID>,
+        requiresKnownBaseline: Bool
+    ) async throws -> SavedRepositorySnapshot {
         guard descriptor.role.canEdit else {
             throw CloudRepositoryError.repositoryLocked
         }
+        var uploadSnapshot = snapshot
+        uploadSnapshot.imageContentHashes = try Self.imageContentHashes(
+            in: snapshot
+        )
 
         var normalizedDescriptor = descriptor
         if normalizedDescriptor.role == .local {
@@ -168,84 +474,314 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         let database = database(for: normalizedDescriptor.role)
         try await saveZoneIfNeeded(zoneID: zoneID, in: database)
         let recordID = CKRecord.ID(recordName: Constant.rootRecordName, zoneID: zoneID)
-        let record = try await fetchRecordIfPresent(
+        let existingRecord = try await fetchRecordIfPresent(
             recordID: recordID,
-            in: database,
-            desiredKeys: [Constant.updatedAtKey, Constant.entryCountKey]
-        ) ?? CKRecord(recordType: Constant.recordType, recordID: recordID)
+            in: database
+        )
+        if !requiresKnownBaseline,
+           existingRecord != nil {
+            let remoteOperationID = try existingRecord.flatMap {
+                try Self.cloudUploadOperationID(from: $0)
+            }
+            if remoteOperationID == snapshot.cloudUploadOperationID,
+               let existingRecord {
+                return SavedRepositorySnapshot(
+                    descriptor: normalizedDescriptor,
+                    serverModifiedAt: existingRecord.modificationDate,
+                    recordChangeTag: existingRecord.recordChangeTag
+                )
+            }
+            guard let remoteOperationID,
+                  acceptedPredecessorOperationIDs.contains(remoteOperationID),
+                  existingRecord != nil else {
+                throw CloudRepositoryError.repositoryConflict(
+                    serverRecordChangeTag: existingRecord?.recordChangeTag
+                )
+            }
+        }
+        if requiresKnownBaseline {
+            let baselineMatches =
+                expectedRecordChangeTag != nil &&
+                existingRecord?.recordChangeTag == expectedRecordChangeTag
+            if !baselineMatches {
+                let remoteOperationID = try existingRecord.flatMap {
+                    try Self.cloudUploadOperationID(from: $0)
+                }
+                if remoteOperationID == snapshot.cloudUploadOperationID,
+                   let existingRecord {
+                    return SavedRepositorySnapshot(
+                        descriptor: normalizedDescriptor,
+                        serverModifiedAt: existingRecord.modificationDate,
+                        recordChangeTag: existingRecord.recordChangeTag
+                    )
+                }
+                guard let remoteOperationID,
+                      acceptedPredecessorOperationIDs.contains(remoteOperationID),
+                      existingRecord != nil else {
+                    throw CloudRepositoryError.repositoryConflict(
+                        serverRecordChangeTag: existingRecord?.recordChangeTag
+                    )
+                }
+            }
+            guard existingRecord != nil else {
+                throw CloudRepositoryError.repositoryConflict(
+                    serverRecordChangeTag: existingRecord?.recordChangeTag
+                )
+            }
+        }
+        let previousSnapshot = try existingRecord.map {
+            try Self.repositorySnapshot(from: $0)
+        }
+        let imageMutationPlan = try Self.imageMutationPlan(
+            for: uploadSnapshot,
+            replacing: previousSnapshot
+        )
+        let record = existingRecord ??
+            CKRecord(recordType: Constant.recordType, recordID: recordID)
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let archiveData = try encoder.encode(snapshot.removingEmbeddedImages())
+        let archiveData = try encoder.encode(
+            uploadSnapshot.removingEmbeddedImages()
+        )
         let temporaryFile = try TemporaryAssetFile(data: archiveData, fileExtension: "json")
 
-        try await saveImageAssets(snapshot.embeddedImages, zoneID: zoneID, in: database)
+        let preparedImageAssets = try await prepareImageAssetsForSave(
+            imageMutationPlan.assetsToSave,
+            referencesToInspect:
+                Set(imageMutationPlan.referencesToInspectBeforeSave),
+            zoneID: zoneID,
+            in: database
+        )
+        let imageRecordIDsToDelete =
+            try await existingImageRecordIDs(
+                references: imageMutationPlan.referencesToDelete,
+                zoneID: zoneID,
+                in: database
+            )
 
-        record[Constant.updatedAtKey] = snapshot.updatedAt as CKRecordValue
-        record[Constant.entryCountKey] = snapshot.entries.count as CKRecordValue
+        record[Constant.updatedAtKey] =
+            uploadSnapshot.updatedAt as CKRecordValue
+        record[Constant.entryCountKey] =
+            uploadSnapshot.entries.count as CKRecordValue
         record[Constant.payloadKey] = CKAsset(fileURL: temporaryFile.url)
 
-        _ = try await saveRecord(record, in: database)
+        let savedRecord: CKRecord
+        do {
+            savedRecord = try await saveRepositoryRecordsAtomically(
+                rootRecord: record,
+                imageRecords: preparedImageAssets.records,
+                imageRecordIDsToDelete: imageRecordIDsToDelete,
+                in: database
+            )
+        } catch let cloudError as CKError where cloudError.code == .serverRecordChanged {
+            let serverRecord = (cloudError as NSError)
+                .userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord
+            throw CloudRepositoryError.repositoryConflict(
+                serverRecordChangeTag: serverRecord?.recordChangeTag
+            )
+        }
         _ = temporaryFile
+        _ = preparedImageAssets.temporaryFiles
 
         if normalizedDescriptor.role == .owner,
            let share = try await fetchShareIfPresent(zoneID: zoneID, in: privateDatabase) {
             normalizedDescriptor.shareRecordName = share.recordID.recordName
         }
 
-        return normalizedDescriptor
-    }
-
-    func shareURL(using descriptor: RepositoryDescriptor, snapshot: RepositorySnapshot) async throws -> URL {
-        let normalizedDescriptor = try await saveSnapshot(snapshot, using: descriptor)
-        guard normalizedDescriptor.role == .owner,
-              let zoneID = normalizedDescriptor.zoneID else {
-            throw CloudRepositoryError.shareUnavailable
-        }
-
-        let share = try await fetchOrCreateShare(zoneID: zoneID)
-        guard let url = share.url else {
-            throw CloudRepositoryError.shareUnavailable
-        }
-
-        return url
+        return SavedRepositorySnapshot(
+            descriptor: normalizedDescriptor,
+            serverModifiedAt: savedRecord.modificationDate,
+            recordChangeTag: savedRecord.recordChangeTag
+        )
     }
 
     func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws {
-        let subscription: CKSubscription
+        let subscription: CKDatabaseSubscription
         let database: CKDatabase
+        let obsoleteSubscriptionIDs: [CKSubscription.ID]
 
         switch descriptor.role {
         case .local:
             return
         case .owner:
-            guard let zoneID = descriptor.zoneID else {
-                return
-            }
-
             database = privateDatabase
-            subscription = CKRecordZoneSubscription(
-                zoneID: zoneID,
-                subscriptionID: subscriptionID(for: descriptor)
+            subscription = CKDatabaseSubscription(
+                subscriptionID: Constant.privateDatabaseSubscriptionID
             )
+            obsoleteSubscriptionIDs = legacySubscriptionIDs(for: descriptor)
         case .editor, .viewer:
             database = sharedDatabase
             subscription = CKDatabaseSubscription(subscriptionID: Constant.sharedDatabaseSubscriptionID)
+            obsoleteSubscriptionIDs = [Constant.legacySharedDatabaseSubscriptionID]
         }
 
+        subscription.recordType = Constant.recordType
         let notificationInfo = CKSubscription.NotificationInfo()
         notificationInfo.shouldSendContentAvailable = true
         subscription.notificationInfo = notificationInfo
 
-        let result = try await database.modifySubscriptions(saving: [subscription], deleting: [])
-        switch result.saveResults[subscription.subscriptionID] {
-        case .success:
-            return
-        case .failure(let error):
-            throw error
-        case nil:
-            throw CloudRepositoryError.shareUnavailable
+        let candidateIDs = Array(
+            Set([subscription.subscriptionID] + obsoleteSubscriptionIDs)
+        )
+        let existingSubscriptions = try await database.subscriptions(for: candidateIDs)
+        for result in existingSubscriptions.values {
+            if case let .failure(error) = result,
+               !Self.isUnknownItemError(error) {
+                throw error
+            }
         }
+
+        let currentSubscription: CKDatabaseSubscription?
+        if case let .success(existing)? = existingSubscriptions[subscription.subscriptionID] {
+            currentSubscription = existing as? CKDatabaseSubscription
+        } else {
+            currentSubscription = nil
+        }
+        let isCurrentConfiguration =
+            currentSubscription?.recordType == Constant.recordType &&
+            currentSubscription?.notificationInfo?.shouldSendContentAvailable == true
+        let obsoleteExistingIDs = obsoleteSubscriptionIDs.filter {
+            if case .success? = existingSubscriptions[$0] {
+                return $0 != subscription.subscriptionID
+            }
+            return false
+        }
+        guard !isCurrentConfiguration || !obsoleteExistingIDs.isEmpty else {
+            return
+        }
+
+        let subscriptionsToSave = isCurrentConfiguration ? [] : [subscription]
+        let result = try await database.modifySubscriptions(
+            saving: subscriptionsToSave,
+            deleting: obsoleteExistingIDs
+        )
+        if !isCurrentConfiguration {
+            switch result.saveResults[subscription.subscriptionID] {
+            case .success:
+                break
+            case .failure(let error):
+                throw error
+            case nil:
+                throw CloudRepositoryError.shareUnavailable
+            }
+        }
+        for subscriptionID in obsoleteExistingIDs {
+            if case let .failure(error)? = result.deleteResults[subscriptionID],
+               !Self.isUnknownItemError(error) {
+                throw error
+            }
+        }
+    }
+
+    func pendingRepositoryZoneChanges(
+        in scope: CloudDatabaseScope
+    ) async throws -> CloudRepositoryDatabaseChanges {
+        let database: CKDatabase
+        switch scope {
+        case .privateDatabase:
+            database = privateDatabase
+        case .sharedDatabase:
+            database = sharedDatabase
+        }
+
+        let storedChangeToken: CKServerChangeToken?
+        do {
+            storedChangeToken = try changeTokenStore?.loadToken(for: scope)
+        } catch {
+            try? changeTokenStore?.removeToken(for: scope)
+            storedChangeToken = nil
+        }
+
+        var changeToken = storedChangeToken
+        var changes = CloudRepositoryDatabaseChanges(
+            modifiedZoneIDs: try changeTokenStore?.loadPendingZoneIDs(for: scope) ?? [],
+            deletedZones: try changeTokenStore?.loadPendingDeletedZones(for: scope) ?? []
+        )
+        var didRecoverExpiredToken = false
+
+        while true {
+            do {
+                let databaseChanges = try await database.databaseChanges(since: changeToken)
+                for modification in databaseChanges.modifications {
+                    let zoneID = CloudRepositoryZoneIdentity(
+                        zoneID: modification.zoneID
+                    )
+                    changes.modifiedZoneIDs.insert(zoneID)
+                    changes.deletedZones = Set(
+                        changes.deletedZones.filter { $0.zoneID != zoneID }
+                    )
+                }
+                for deletion in databaseChanges.deletions {
+                    let zoneID = CloudRepositoryZoneIdentity(
+                        zoneID: deletion.zoneID
+                    )
+                    let reason: CloudRepositoryZoneDeletionReason
+                    switch deletion.reason {
+                    case .deleted:
+                        reason = .deleted
+                    case .purged:
+                        reason = .purged
+                    case .encryptedDataReset:
+                        reason = .encryptedDataReset
+                    @unknown default:
+                        reason = .deleted
+                    }
+                    changes.modifiedZoneIDs.remove(zoneID)
+                    changes.deletedZones = Set(
+                        changes.deletedZones.filter { $0.zoneID != zoneID }
+                    )
+                    changes.deletedZones.insert(
+                        CloudRepositoryZoneDeletion(
+                            zoneID: zoneID,
+                            reason: reason
+                        )
+                    )
+                }
+                try changeTokenStore?.savePendingZoneIDs(
+                    changes.modifiedZoneIDs,
+                    for: scope
+                )
+                try changeTokenStore?.savePendingDeletedZones(
+                    changes.deletedZones,
+                    for: scope
+                )
+                try changeTokenStore?.saveToken(databaseChanges.changeToken, for: scope)
+                changeToken = databaseChanges.changeToken
+
+                if !databaseChanges.moreComing {
+                    return changes
+                }
+            } catch {
+                guard !didRecoverExpiredToken,
+                      let cloudError = error as? CKError,
+                      cloudError.code == .changeTokenExpired else {
+                    throw error
+                }
+
+                didRecoverExpiredToken = true
+                changeToken = nil
+                try changeTokenStore?.removeToken(for: scope)
+            }
+        }
+    }
+
+    func acknowledgeRepositoryZoneChanges(
+        _ changes: CloudRepositoryDatabaseChanges,
+        in scope: CloudDatabaseScope
+    ) async throws {
+        try changeTokenStore?.acknowledgePendingZoneIDs(
+            changes.modifiedZoneIDs,
+            for: scope
+        )
+        try changeTokenStore?.acknowledgePendingDeletedZones(
+            changes.deletedZones,
+            for: scope
+        )
+    }
+
+    func resetRemoteChangeTracking() async throws {
+        try changeTokenStore?.removeAllTrackingState()
     }
 
     @MainActor
@@ -254,9 +790,8 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         snapshot: RepositorySnapshot,
         access: ShareAccessOption
     ) async throws -> UICloudSharingController {
-        let normalizedDescriptor = try await saveSnapshot(snapshot, using: descriptor)
-        guard normalizedDescriptor.role == .owner,
-              let zoneID = normalizedDescriptor.zoneID else {
+        guard descriptor.role == .owner,
+              let zoneID = descriptor.zoneID else {
             throw CloudRepositoryError.shareUnavailable
         }
 
@@ -288,11 +823,13 @@ final class CloudRepositoryService: CloudRepositoryServicing {
             shareRecordName: shareRecord.recordID.recordName,
             role: role
         )
-        let snapshot = try await loadSnapshot(using: descriptor)
+        let loadedRepository = try await loadSnapshotWithMetadata(using: descriptor)
         return AcceptedSharedRepository(
             descriptor: descriptor,
-            snapshot: snapshot,
-            displayName: L10n.sharedRepositoryDisplayName(ownerName: ownerDisplayName)
+            snapshot: loadedRepository.snapshot,
+            displayName: L10n.sharedRepositoryDisplayName(ownerName: ownerDisplayName),
+            serverModifiedAt: loadedRepository.metadata.serverModifiedAt,
+            recordChangeTag: loadedRepository.metadata.recordChangeTag
         )
     }
 
@@ -380,6 +917,7 @@ final class CloudRepositoryService: CloudRepositoryServicing {
 
     private func fetchImageAssets(
         references: [String],
+        expectedContentHashes: [String: String],
         zoneID: CKRecordZone.ID,
         in database: CKDatabase
     ) async throws -> [RepositoryImageAsset] {
@@ -400,7 +938,11 @@ final class CloudRepositoryService: CloudRepositoryServicing {
             )
             let results = try await database.records(
                 for: Array(idsByReference.values),
-                desiredKeys: [Constant.referenceKey, Constant.payloadKey]
+                desiredKeys: [
+                    Constant.referenceKey,
+                    Constant.contentHashKey,
+                    Constant.payloadKey
+                ]
             )
 
             for reference in batch {
@@ -411,13 +953,22 @@ final class CloudRepositoryService: CloudRepositoryServicing {
 
                 switch result {
                 case .success(let record):
-                    let storedReference = (record[Constant.referenceKey] as? String) ?? reference
                     guard let asset = record[Constant.payloadKey] as? CKAsset,
                           let data = try Self.assetData(from: asset) else {
                         continue
                     }
 
-                    assetsByReference[reference] = RepositoryImageAsset(reference: storedReference, data: data)
+                    assetsByReference[reference] =
+                        try Self.validatedImageAsset(
+                            requestedReference: reference,
+                            storedReference:
+                                record[Constant.referenceKey] as? String,
+                            recordedContentHash:
+                                record[Constant.contentHashKey] as? String,
+                            expectedContentHash:
+                                expectedContentHashes[reference],
+                            data: data
+                    )
                 case .failure(let error):
                     if let ckError = error as? CKError, ckError.code == .unknownItem {
                         continue
@@ -428,92 +979,252 @@ final class CloudRepositoryService: CloudRepositoryServicing {
             }
         }
 
+        guard Set(assetsByReference.keys) == Set(references) else {
+            throw CloudRepositoryError.invalidRepositoryData
+        }
         return references.compactMap { assetsByReference[$0] }
     }
 
-    private func saveImageAssets(
+    private func prepareImageAssetsForSave(
         _ assets: [RepositoryImageAsset],
+        referencesToInspect: Set<String>,
         zoneID: CKRecordZone.ID,
         in database: CKDatabase
-    ) async throws {
+    ) async throws -> (
+        records: [CKRecord],
+        temporaryFiles: [TemporaryAssetFile]
+    ) {
         guard !assets.isEmpty else {
-            return
+            return ([], [])
         }
 
         let uniqueAssets = Dictionary(assets.map { ($0.reference, $0) }) { _, latest in latest }
-
-        for batch in Self.chunks(Array(uniqueAssets.keys).sorted(), size: Constant.recordBatchSize) {
-            let recordIDsByReference = Dictionary(
+        var existingRecordsByReference: [String: CKRecord] = [:]
+        for batch in Self.chunks(
+            Array(referencesToInspect).sorted(),
+            size: Constant.recordBatchSize
+        ) {
+            let idsByReference = Dictionary(
                 uniqueKeysWithValues: batch.map { reference in
                     (
                         reference,
-                        CKRecord.ID(recordName: Self.imageRecordName(for: reference), zoneID: zoneID)
+                        CKRecord.ID(
+                            recordName: Self.imageRecordName(for: reference),
+                            zoneID: zoneID
+                        )
                     )
                 }
             )
-            let existingResults = try await database.records(
-                for: Array(recordIDsByReference.values),
-                desiredKeys: [Constant.contentHashKey]
+            let results = try await database.records(
+                for: Array(idsByReference.values),
+                desiredKeys: [
+                    Constant.referenceKey,
+                    Constant.contentHashKey
+                ]
             )
+            for reference in batch {
+                guard let recordID = idsByReference[reference],
+                      let result = results[recordID] else {
+                    continue
+                }
+                switch result {
+                case .success(let record):
+                    existingRecordsByReference[reference] = record
+                case .failure(let error):
+                    if let cloudError = error as? CKError,
+                       cloudError.code == .unknownItem {
+                        continue
+                    }
+                    throw error
+                }
+            }
+        }
 
-            var temporaryFiles: [TemporaryAssetFile] = []
+        var allRecordsToSave: [CKRecord] = []
+        var allTemporaryFiles: [TemporaryAssetFile] = []
+
+        for batch in Self.chunks(
+            Array(uniqueAssets.keys).sorted(),
+            size: Constant.recordBatchSize
+        ) {
             let recordsToSave: [CKRecord] = try batch.compactMap { reference in
-                guard let asset = uniqueAssets[reference],
-                      let recordID = recordIDsByReference[reference] else {
+                guard let asset = uniqueAssets[reference] else {
                     return nil
                 }
 
                 let contentHash = Self.contentHash(for: asset.data)
+                let recordID = CKRecord.ID(
+                    recordName: Self.imageRecordName(for: reference),
+                    zoneID: zoneID
+                )
                 let record: CKRecord
-
-                if let existingResult = existingResults[recordID] {
-                    switch existingResult {
-                    case .success(let existingRecord):
-                        if existingRecord[Constant.contentHashKey] as? String == contentHash {
-                            return nil
-                        }
-
-                        record = existingRecord
-                    case .failure(let error):
-                        if let ckError = error as? CKError, ckError.code == .unknownItem {
-                            record = CKRecord(recordType: Constant.imageRecordType, recordID: recordID)
-                        } else {
-                            throw error
-                        }
+                if let existingRecord =
+                    existingRecordsByReference[reference] {
+                    if existingRecord[Constant.contentHashKey] as? String ==
+                        contentHash {
+                        return nil
                     }
+                    record = existingRecord
                 } else {
-                    record = CKRecord(recordType: Constant.imageRecordType, recordID: recordID)
+                    record = CKRecord(
+                        recordType: Constant.imageRecordType,
+                        recordID: recordID
+                    )
                 }
-
                 let temporaryFile = try TemporaryAssetFile(data: asset.data, fileExtension: "jpg")
-                temporaryFiles.append(temporaryFile)
+                allTemporaryFiles.append(temporaryFile)
                 record[Constant.referenceKey] = reference as CKRecordValue
                 record[Constant.contentHashKey] = contentHash as CKRecordValue
                 record[Constant.payloadKey] = CKAsset(fileURL: temporaryFile.url)
                 return record
             }
 
-            guard !recordsToSave.isEmpty else {
-                continue
+            allRecordsToSave.append(contentsOf: recordsToSave)
+            guard allRecordsToSave.count + 1 <= Constant.maximumAtomicRecordsPerSave else {
+                throw CloudRepositoryError.atomicSaveLimitExceeded
             }
+        }
 
-            let result = try await database.modifyRecords(saving: recordsToSave, deleting: [])
-            _ = temporaryFiles
-            for record in recordsToSave {
-                switch result.saveResults[record.recordID] {
+        return (allRecordsToSave, allTemporaryFiles)
+    }
+
+    private func existingImageRecordIDs(
+        references: [String],
+        zoneID: CKRecordZone.ID,
+        in database: CKDatabase
+    ) async throws -> [CKRecord.ID] {
+        var existingRecordIDs: [CKRecord.ID] = []
+        for batch in Self.chunks(
+            references,
+            size: Constant.recordBatchSize
+        ) {
+            let recordIDs = batch.map {
+                CKRecord.ID(
+                    recordName: Self.imageRecordName(for: $0),
+                    zoneID: zoneID
+                )
+            }
+            let results = try await database.records(
+                for: recordIDs,
+                desiredKeys: []
+            )
+            for recordID in recordIDs {
+                switch results[recordID] {
                 case .success:
-                    continue
+                    existingRecordIDs.append(recordID)
                 case .failure(let error):
+                    if let cloudError = error as? CKError,
+                       cloudError.code == .unknownItem {
+                        continue
+                    }
                     throw error
                 case nil:
-                    throw CloudRepositoryError.repositoryNotFound
+                    continue
                 }
             }
         }
+        return existingRecordIDs
+    }
+
+    private func saveRepositoryRecordsAtomically(
+        rootRecord: CKRecord,
+        imageRecords: [CKRecord],
+        imageRecordIDsToDelete: [CKRecord.ID],
+        in database: CKDatabase
+    ) async throws -> CKRecord {
+        let recordsToSave = [rootRecord] + imageRecords
+        guard recordsToSave.count + imageRecordIDsToDelete.count <=
+                Constant.maximumAtomicRecordsPerSave else {
+            throw CloudRepositoryError.atomicSaveLimitExceeded
+        }
+
+        let result: (
+            saveResults: [CKRecord.ID: Result<CKRecord, any Error>],
+            deleteResults: [CKRecord.ID: Result<Void, any Error>]
+        )
+        do {
+            result = try await database.modifyRecords(
+                saving: recordsToSave,
+                deleting: imageRecordIDsToDelete,
+                savePolicy: .ifServerRecordUnchanged,
+                atomically: true
+            )
+        } catch {
+            if Self.containsServerRecordChangedError(error) {
+                throw CloudRepositoryError.repositoryConflict(
+                    serverRecordChangeTag: rootRecord.recordChangeTag
+                )
+            }
+            throw error
+        }
+
+        for record in recordsToSave {
+            if case let .failure(error)? = result.saveResults[record.recordID],
+               Self.containsServerRecordChangedError(error) {
+                throw CloudRepositoryError.repositoryConflict(
+                    serverRecordChangeTag: rootRecord.recordChangeTag
+                )
+            }
+        }
+
+        let savedRootRecord: CKRecord
+        switch result.saveResults[rootRecord.recordID] {
+        case .success(let record):
+            savedRootRecord = record
+        case .failure(let error):
+            throw error
+        case nil:
+            throw CloudRepositoryError.repositoryNotFound
+        }
+
+        for imageRecord in imageRecords {
+            switch result.saveResults[imageRecord.recordID] {
+            case .success:
+                continue
+            case .failure(let error):
+                throw error
+            case nil:
+                throw CloudRepositoryError.repositoryNotFound
+            }
+        }
+        for recordID in imageRecordIDsToDelete {
+            switch result.deleteResults[recordID] {
+            case .success:
+                continue
+            case .failure(let error):
+                throw error
+            case nil:
+                throw CloudRepositoryError.repositoryNotFound
+            }
+        }
+        return savedRootRecord
+    }
+
+    nonisolated private static func containsServerRecordChangedError(_ error: Error) -> Bool {
+        if let cloudError = error as? CKError,
+           cloudError.code == .serverRecordChanged {
+            return true
+        }
+
+        let nsError = error as NSError
+        if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error,
+           containsServerRecordChangedError(underlyingError) {
+            return true
+        }
+        if nsError.domain == CKErrorDomain,
+           let partialErrors = nsError.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: Error] {
+            return partialErrors.values.contains(where: containsServerRecordChangedError)
+        }
+        return false
     }
 
     private func saveRecord(_ record: CKRecord, in database: CKDatabase) async throws -> CKRecord {
-        let result = try await database.modifyRecords(saving: [record], deleting: [])
+        let result = try await database.modifyRecords(
+            saving: [record],
+            deleting: [],
+            savePolicy: .ifServerRecordUnchanged,
+            atomically: true
+        )
         switch result.saveResults[record.recordID] {
         case .success(let savedRecord):
             return savedRecord
@@ -544,17 +1255,39 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         return try Data(contentsOf: url)
     }
 
-    private static func imageRecordName(for reference: String) -> String {
+    private static func cloudUploadOperationID(from record: CKRecord) throws -> UUID? {
+        try repositorySnapshot(from: record).cloudUploadOperationID
+    }
+
+    private static func repositorySnapshot(
+        from record: CKRecord
+    ) throws -> RepositorySnapshot {
+        guard let asset = record[Constant.payloadKey] as? CKAsset,
+              let data = try assetData(from: asset) else {
+            throw CloudRepositoryError.invalidRepositoryData
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(RepositorySnapshot.self, from: data)
+    }
+
+    nonisolated private static func imageRecordName(
+        for reference: String
+    ) -> String {
         "RepositoryImageAsset-\(reference)"
     }
 
-    private static func contentHash(for data: Data) -> String {
+    nonisolated private static func contentHash(for data: Data) -> String {
         SHA256.hash(data: data)
             .map { String(format: "%02x", $0) }
             .joined()
     }
 
-    private static func chunks<T>(_ values: [T], size: Int) -> [[T]] {
+    nonisolated private static func chunks<T>(
+        _ values: [T],
+        size: Int
+    ) -> [[T]] {
         guard size > 0 else {
             return [values]
         }
@@ -564,11 +1297,15 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         }
     }
 
-    private static func localImageReferences(in snapshot: RepositorySnapshot) -> Set<String> {
+    nonisolated private static func localImageReferences(
+        in snapshot: RepositorySnapshot
+    ) -> Set<String> {
         Set(snapshot.entries.compactMap { localImageReference($0.imageReference) })
     }
 
-    private static func localImageReference(_ reference: String?) -> String? {
+    nonisolated private static func localImageReference(
+        _ reference: String?
+    ) -> String? {
         guard let value = reference?.trimmed.nilIfEmpty else {
             return nil
         }
@@ -589,8 +1326,23 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         return lastPathComponent.nilIfEmpty
     }
 
-    private func subscriptionID(for descriptor: RepositoryDescriptor) -> String {
-        "repository-updates-\(descriptor.storageIdentifier)"
+    private func legacySubscriptionIDs(for descriptor: RepositoryDescriptor) -> [CKSubscription.ID] {
+        var descriptors = [descriptor]
+        var descriptorWithoutShare = descriptor
+        descriptorWithoutShare.shareRecordName = nil
+        descriptors.append(descriptorWithoutShare)
+
+        return Array(
+            Set(descriptors.map { "repository-updates-\($0.storageIdentifier)" })
+        )
+    }
+
+    private static func isUnknownItemError(_ error: Error) -> Bool {
+        guard let cloudError = error as? CKError else {
+            return false
+        }
+
+        return cloudError.code == .unknownItem
     }
 }
 

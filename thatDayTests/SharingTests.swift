@@ -855,7 +855,7 @@ final class SharingTests: AppStoreTestCase {
     }
 
     @MainActor
-    func testForegroundActivationRefreshesSharedRepositoriesOnlyAfterThreshold() async throws {
+    func testForegroundActivationDebouncesBriefSceneChurnAndCatchesUpAfterThirtySeconds() async throws {
         let storageRoot = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
         let sharedDescriptor = RepositoryDescriptor(
@@ -929,7 +929,7 @@ final class SharingTests: AppStoreTestCase {
         XCTAssertEqual(cloudService.loadedDescriptors.count, 0)
         XCTAssertEqual(store.entries.first?.title, "Shared Blog")
 
-        currentDate = fixtureDate("2026-04-16T12:10:00Z")
+        currentDate = fixtureDate("2026-04-16T12:00:10Z")
         cloudService.loadedSnapshot = updatedSnapshot
         await store.handleScenePhaseChange(.active)
 
@@ -937,7 +937,7 @@ final class SharingTests: AppStoreTestCase {
         XCTAssertEqual(cloudService.loadedDescriptors.count, 0)
         XCTAssertEqual(store.entries.first?.title, "Shared Blog")
 
-        currentDate = fixtureDate("2026-04-16T12:31:00Z")
+        currentDate = fixtureDate("2026-04-16T12:00:31Z")
         await store.handleScenePhaseChange(.active)
 
         XCTAssertEqual(cloudService.loadedMetadataDescriptors.count, 2)

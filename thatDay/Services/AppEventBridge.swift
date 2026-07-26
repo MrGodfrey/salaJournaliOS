@@ -1,5 +1,7 @@
+import CloudKit
 import Combine
 import Foundation
+import UIKit
 import UserNotifications
 
 struct NotificationEntryRoute: Hashable, Sendable {
@@ -7,24 +9,91 @@ struct NotificationEntryRoute: Hashable, Sendable {
     var entryID: UUID?
 }
 
+nonisolated enum CloudDatabaseScope: Equatable, Hashable, Sendable {
+    case privateDatabase
+    case sharedDatabase
+
+    init?(_ scope: CKDatabase.Scope) {
+        switch scope {
+        case .private:
+            self = .privateDatabase
+        case .shared:
+            self = .sharedDatabase
+        case .public:
+            return nil
+        @unknown default:
+            return nil
+        }
+    }
+}
+
+nonisolated enum CloudRemoteNotificationTarget: Equatable, Sendable {
+    case database(CloudDatabaseScope)
+    case zone(ownerName: String, zoneName: String)
+
+    init?(remoteNotificationDictionary userInfo: [AnyHashable: Any]) {
+        guard let notification = CKNotification(fromRemoteNotificationDictionary: userInfo) else {
+            return nil
+        }
+
+        if let zoneNotification = notification as? CKRecordZoneNotification {
+            if let zoneID = zoneNotification.recordZoneID {
+                self = .zone(ownerName: zoneID.ownerName, zoneName: zoneID.zoneName)
+                return
+            }
+
+            guard let scope = CloudDatabaseScope(zoneNotification.databaseScope) else {
+                return nil
+            }
+            self = .database(scope)
+            return
+        }
+
+        if let databaseNotification = notification as? CKDatabaseNotification,
+           let scope = CloudDatabaseScope(databaseNotification.databaseScope) {
+            self = .database(scope)
+            return
+        }
+
+        return nil
+    }
+}
+
 @MainActor
-final class RepositoryRemoteChangeCenter: ObservableObject {
+final class RepositoryRemoteChangeCenter {
+    typealias Handler = (CloudRemoteNotificationTarget?) async -> UIBackgroundFetchResult
+
     static let shared = RepositoryRemoteChangeCenter()
 
-    @Published private(set) var deliverySequence = 0
+    private var handler: Handler?
 
-    private var pendingUserInfos: [[AnyHashable: Any]] = []
+    init() {}
 
-    private init() {}
-
-    func enqueue(_ userInfo: [AnyHashable: Any]) {
-        pendingUserInfos.append(userInfo)
-        deliverySequence &+= 1
+    func installHandler(_ handler: @escaping Handler) {
+        self.handler = handler
     }
 
-    func drainPendingUserInfos() -> [[AnyHashable: Any]] {
-        defer { pendingUserInfos.removeAll() }
-        return pendingUserInfos
+    func processRemoteNotification(
+        _ userInfo: [AnyHashable: Any]
+    ) async -> UIBackgroundFetchResult {
+        guard let target = CloudRemoteNotificationTarget(
+            remoteNotificationDictionary: userInfo
+        ) else {
+            return .noData
+        }
+        guard let handler else {
+            return .failed
+        }
+
+        return await handler(target)
+    }
+
+    func performRecoveryRefresh() async -> UIBackgroundFetchResult {
+        guard let handler else {
+            return .failed
+        }
+
+        return await handler(nil)
     }
 }
 

@@ -72,19 +72,25 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
     var isSharedUpdateNotificationEnabled: Bool
     var sharedUpdateNotificationScope: SharedUpdateNotificationScope
     var appTimeZone: AppTimeZone
+    var cloudRetryAfter: Date?
+    var lastSuccessfulCloudRefreshAt: Date?
 
     init(
         defaultRepositoryID: String = RepositoryReference.localRepositoryID,
         isBiometricLockEnabled: Bool = false,
         isSharedUpdateNotificationEnabled: Bool = false,
         sharedUpdateNotificationScope: SharedUpdateNotificationScope = .all,
-        appTimeZone: AppTimeZone = .system
+        appTimeZone: AppTimeZone = .system,
+        cloudRetryAfter: Date? = nil,
+        lastSuccessfulCloudRefreshAt: Date? = nil
     ) {
         self.defaultRepositoryID = defaultRepositoryID
         self.isBiometricLockEnabled = isBiometricLockEnabled
         self.isSharedUpdateNotificationEnabled = isSharedUpdateNotificationEnabled
         self.sharedUpdateNotificationScope = sharedUpdateNotificationScope
         self.appTimeZone = appTimeZone
+        self.cloudRetryAfter = cloudRetryAfter
+        self.lastSuccessfulCloudRefreshAt = lastSuccessfulCloudRefreshAt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -93,6 +99,8 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
         case isSharedUpdateNotificationEnabled
         case sharedUpdateNotificationScope
         case appTimeZone
+        case cloudRetryAfter
+        case lastSuccessfulCloudRefreshAt
     }
 
     init(from decoder: any Decoder) throws {
@@ -103,6 +111,8 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
         isSharedUpdateNotificationEnabled = try container.decodeIfPresent(Bool.self, forKey: .isSharedUpdateNotificationEnabled) ?? false
         sharedUpdateNotificationScope = try container.decodeIfPresent(SharedUpdateNotificationScope.self, forKey: .sharedUpdateNotificationScope) ?? .all
         appTimeZone = try container.decodeIfPresent(AppTimeZone.self, forKey: .appTimeZone) ?? .system
+        cloudRetryAfter = try container.decodeIfPresent(Date.self, forKey: .cloudRetryAfter)
+        lastSuccessfulCloudRefreshAt = try container.decodeIfPresent(Date.self, forKey: .lastSuccessfulCloudRefreshAt)
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -112,5 +122,7 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
         try container.encode(isSharedUpdateNotificationEnabled, forKey: .isSharedUpdateNotificationEnabled)
         try container.encode(sharedUpdateNotificationScope, forKey: .sharedUpdateNotificationScope)
         try container.encode(appTimeZone, forKey: .appTimeZone)
+        try container.encodeIfPresent(cloudRetryAfter, forKey: .cloudRetryAfter)
+        try container.encodeIfPresent(lastSuccessfulCloudRefreshAt, forKey: .lastSuccessfulCloudRefreshAt)
     }
 }

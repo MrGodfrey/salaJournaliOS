@@ -2,6 +2,425 @@ import XCTest
 @testable import thatDay
 
 final class ArchiveTests: AppStoreTestCase {
+    func testPreparingImportDoesNotTouchDestinationOrExistingOutbox() async throws {
+        let rootURL = makeTempDirectory()
+        let sourceStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent("prepare-source", isDirectory: true)
+        )
+        let destinationStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent("prepare-destination", isDirectory: true)
+        )
+        let initialDate = fixtureDate("2026-07-25T15:00:00Z")
+        let importedDate = fixtureDate("2026-07-25T16:00:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(title: "Destination stays live", happenedAt: initialDate)
+            ],
+            updatedAt: initialDate
+        )
+        let importedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(title: "Staged import", happenedAt: importedDate)
+            ],
+            updatedAt: importedDate
+        )
+        let descriptor = RepositoryDescriptor(
+            zoneName: "prepare-import-zone",
+            zoneOwnerName: "_prepare_import_owner_",
+            shareRecordName: "prepare-import-share",
+            role: .owner
+        )
+        try sourceStore.saveDescriptor(.local)
+        try sourceStore.saveSnapshot(importedSnapshot)
+        try destinationStore.saveDescriptor(descriptor)
+        try destinationStore.saveSnapshot(initialSnapshot)
+        let existingOutbox = try CloudUploadOutboxRecord(
+            repositoryID: descriptor.storageIdentifier,
+            descriptor: descriptor,
+            displayName: "Prepare Import",
+            snapshot: initialSnapshot,
+            generation: 4,
+            baseRecordChangeTag: "prepare-baseline",
+            createdAt: initialDate
+        )
+        let destinationOutboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: destinationStore.rootURL
+        )
+        try destinationOutboxStore.save(existingOutbox)
+        let service = RepositoryArchiveService()
+        let zipURL = try await service.exportArchive(
+            from: sourceStore,
+            repositoryID: RepositoryReference.localRepositoryID,
+            repositoryName: "Prepared Import"
+        ) { _, _ in }
+
+        let preparedImport = try await service.prepareImportArchive(
+            from: zipURL,
+            nextTo: destinationStore,
+            preserving: descriptor
+        ) { _, _ in }
+
+        XCTAssertEqual(try destinationStore.loadSnapshot(), initialSnapshot)
+        XCTAssertEqual(try destinationOutboxStore.load(), existingOutbox)
+        XCTAssertEqual(preparedImport.snapshot, importedSnapshot)
+        XCTAssertEqual(
+            try preparedImport.repositoryStore.loadSnapshot(),
+            importedSnapshot
+        )
+
+        try service.discardPreparedImport(preparedImport)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: preparedImport.repositoryStore.rootURL.path
+            )
+        )
+    }
+
+    func testInstallingPreparedImportKeepsSuccessorOutboxAcrossDirectoryReplacement() async throws {
+        let rootURL = makeTempDirectory()
+        let sourceStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent("install-source", isDirectory: true)
+        )
+        let destinationStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent("install-destination", isDirectory: true)
+        )
+        let initialDate = fixtureDate("2026-07-25T16:30:00Z")
+        let importedDate = fixtureDate("2026-07-25T17:00:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(title: "Before safe replacement", happenedAt: initialDate)
+            ],
+            updatedAt: initialDate
+        )
+        let importedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(title: "After safe replacement", happenedAt: importedDate)
+            ],
+            updatedAt: importedDate
+        )
+        let descriptor = RepositoryDescriptor(
+            zoneName: "install-import-zone",
+            zoneOwnerName: "_install_import_owner_",
+            shareRecordName: "install-import-share",
+            role: .owner
+        )
+        try sourceStore.saveDescriptor(.local)
+        try sourceStore.saveSnapshot(importedSnapshot)
+        try destinationStore.saveDescriptor(descriptor)
+        try destinationStore.saveSnapshot(initialSnapshot)
+        let service = RepositoryArchiveService()
+        let zipURL = try await service.exportArchive(
+            from: sourceStore,
+            repositoryID: RepositoryReference.localRepositoryID,
+            repositoryName: "Install Import"
+        ) { _, _ in }
+        let preparedImport = try await service.prepareImportArchive(
+            from: zipURL,
+            nextTo: destinationStore,
+            preserving: descriptor
+        ) { _, _ in }
+        let predecessorOperationID = UUID()
+        let successorOutbox = try CloudUploadOutboxRecord(
+            repositoryID: descriptor.storageIdentifier,
+            descriptor: descriptor,
+            displayName: "Install Import",
+            snapshot: importedSnapshot,
+            generation: 8,
+            baseRecordChangeTag: "install-baseline",
+            predecessorOperationIDs: [predecessorOperationID],
+            createdAt: importedDate
+        )
+        try CloudUploadOutboxStore(
+            repositoryRootURL: destinationStore.rootURL
+        ).save(successorOutbox)
+        try CloudUploadOutboxStore(
+            repositoryRootURL: preparedImport.repositoryStore.rootURL
+        ).save(successorOutbox)
+
+        let installedSnapshot = try service.installPreparedImport(
+            preparedImport,
+            replacing: destinationStore
+        )
+
+        XCTAssertEqual(installedSnapshot, importedSnapshot)
+        XCTAssertEqual(try destinationStore.loadSnapshot(), importedSnapshot)
+        XCTAssertEqual(
+            try CloudUploadOutboxStore(
+                repositoryRootURL: destinationStore.rootURL
+            ).load(),
+            successorOutbox
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: rootURL
+                    .appendingPathComponent(
+                        ".install-destination-import-transaction.json"
+                    )
+                    .path
+            )
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: preparedImport.repositoryStore.rootURL.path
+            )
+        )
+    }
+
+    func testCommittedImportSurvivesCleanupFailureAndFinishesRecoveryLater() async throws {
+        let rootURL = makeTempDirectory()
+        let sourceStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent(
+                "cleanup-source",
+                isDirectory: true
+            )
+        )
+        let destinationStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent(
+                "cleanup-destination",
+                isDirectory: true
+            )
+        )
+        let initialDate = fixtureDate("2026-07-25T17:10:00Z")
+        let importedDate = fixtureDate("2026-07-25T17:20:00Z")
+        try sourceStore.saveDescriptor(.local)
+        try sourceStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    makeEntry(
+                        title: "Committed despite cleanup failure",
+                        happenedAt: importedDate
+                    )
+                ],
+                updatedAt: importedDate
+            )
+        )
+        try destinationStore.saveDescriptor(.local)
+        try destinationStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [
+                    makeEntry(
+                        title: "Replaced destination",
+                        happenedAt: initialDate
+                    )
+                ],
+                updatedAt: initialDate
+            )
+        )
+
+        var cleanupAttemptCount = 0
+        let service = RepositoryArchiveService(
+            cleanupImportTransactionArtifacts: {
+                destinationURL,
+                stagingURL,
+                backupURL,
+                keepingDestination in
+                cleanupAttemptCount += 1
+                if cleanupAttemptCount == 1 {
+                    throw ArchiveTestError.cleanupFailed
+                }
+
+                let fileManager = FileManager.default
+                for url in [stagingURL, backupURL]
+                where fileManager.fileExists(atPath: url.path) {
+                    try fileManager.removeItem(at: url)
+                }
+                if !keepingDestination,
+                   fileManager.fileExists(atPath: destinationURL.path) {
+                    try fileManager.removeItem(at: destinationURL)
+                }
+                let transactionURL = destinationURL
+                    .deletingLastPathComponent()
+                    .appendingPathComponent(
+                        ".\(destinationURL.lastPathComponent)-import-transaction.json"
+                    )
+                if fileManager.fileExists(atPath: transactionURL.path) {
+                    try fileManager.removeItem(at: transactionURL)
+                }
+            }
+        )
+        let zipURL = try await service.exportArchive(
+            from: sourceStore,
+            repositoryID: RepositoryReference.localRepositoryID,
+            repositoryName: "Cleanup Failure"
+        ) { _, _ in }
+        let preparedImport = try await service.prepareImportArchive(
+            from: zipURL,
+            nextTo: destinationStore,
+            preserving: .local
+        ) { _, _ in }
+
+        let installedSnapshot = try service.installPreparedImport(
+            preparedImport,
+            replacing: destinationStore
+        )
+
+        XCTAssertEqual(
+            installedSnapshot.entries.map(\.title),
+            ["Committed despite cleanup failure"]
+        )
+        XCTAssertEqual(
+            try destinationStore.loadSnapshot()?.entries.map(\.title),
+            ["Committed despite cleanup failure"]
+        )
+        let transactionURL = rootURL.appendingPathComponent(
+            ".cleanup-destination-import-transaction.json"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: transactionURL.path)
+        )
+
+        try service.recoverInterruptedImport(for: destinationStore)
+
+        XCTAssertEqual(cleanupAttemptCount, 2)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: transactionURL.path)
+        )
+        XCTAssertEqual(
+            try destinationStore.loadSnapshot()?.entries.map(\.title),
+            ["Committed despite cleanup failure"]
+        )
+    }
+
+    @MainActor
+    func testCloudImportChainsPendingOperationAndUploadsImportedSnapshot() async throws {
+        let rootURL = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(
+            rootURL: rootURL.appendingPathComponent("library", isDirectory: true)
+        )
+        let sourceStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent("cloud-import-source", isDirectory: true)
+        )
+        let initialDate = fixtureDate("2026-07-25T17:30:00Z")
+        let pendingDate = fixtureDate("2026-07-25T18:00:00Z")
+        let importedDate = fixtureDate("2026-07-25T18:30:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(title: "Initial cloud cache", happenedAt: initialDate)
+            ],
+            updatedAt: initialDate
+        )
+        let pendingSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(title: "Pending before import", happenedAt: pendingDate)
+            ],
+            updatedAt: pendingDate
+        )
+        let importedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(title: "Imported successor", happenedAt: importedDate)
+            ],
+            updatedAt: importedDate
+        )
+        let descriptor = RepositoryDescriptor(
+            zoneName: "cloud-import-zone",
+            zoneOwnerName: "_cloud_import_owner_",
+            shareRecordName: "cloud-import-share",
+            role: .owner
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let localStore = libraryStore.repositoryStore(
+            for: RepositoryReference.localRepositoryID
+        )
+        let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(RepositorySnapshot(entries: []))
+        try repositoryStore.saveDescriptor(descriptor)
+        try repositoryStore.saveSnapshot(initialSnapshot)
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Cloud Import",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: initialDate,
+            lastKnownServerRecordChangeTag: "cloud-import-baseline",
+            pendingCloudUploadAt: pendingDate,
+            pendingCloudUploadGeneration: 1,
+            pendingCloudUploadBaseChangeTag: "cloud-import-baseline"
+        )
+        try libraryStore.saveCatalog([.local, reference])
+        try libraryStore.savePreferences(
+            AppPreferences(defaultRepositoryID: repositoryID)
+        )
+        let pendingOutbox = try CloudUploadOutboxRecord(
+            repositoryID: repositoryID,
+            descriptor: descriptor,
+            displayName: reference.displayName,
+            snapshot: pendingSnapshot,
+            generation: 1,
+            baseRecordChangeTag: "cloud-import-baseline",
+            createdAt: pendingDate
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: repositoryStore.rootURL
+        )
+        try outboxStore.save(pendingOutbox)
+        try sourceStore.saveDescriptor(.local)
+        try sourceStore.saveSnapshot(importedSnapshot)
+        let zipURL = try await RepositoryArchiveService().exportArchive(
+            from: sourceStore,
+            repositoryID: RepositoryReference.localRepositoryID,
+            repositoryName: "Cloud Import Source"
+        ) { _, _ in }
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.saveSnapshotError = ArchiveTestError.uploadFailed
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { importedDate.addingTimeInterval(60) }
+        )
+        await store.loadIfNeeded()
+        XCTAssertEqual(try outboxStore.load()?.operationID, pendingOutbox.operationID)
+
+        cloudService.savedSnapshots.removeAll()
+        cloudService.savedDescriptors.removeAll()
+        cloudService.savedExpectedRecordChangeTags.removeAll()
+        cloudService.savedAcceptedPredecessorOperationIDs.removeAll()
+        cloudService.saveSnapshotError = nil
+        cloudService.savedRecordChangeTag = "cloud-import-saved-tag"
+        let uploadFinished = expectation(
+            description: "imported successor upload finishes"
+        )
+        cloudService.saveSnapshotFinishedExpectation = uploadFinished
+
+        await store.importRepositoryArchive(from: zipURL)
+        await fulfillment(of: [uploadFinished], timeout: 2)
+        cloudService.saveSnapshotFinishedExpectation = nil
+        for _ in 0..<100 {
+            if try outboxStore.load() == nil {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(cloudService.savedSnapshots.count, 1)
+        XCTAssertEqual(
+            cloudService.savedSnapshots.first?.entries.map(\.title),
+            ["Imported successor"]
+        )
+        XCTAssertEqual(
+            cloudService.savedExpectedRecordChangeTags,
+            ["cloud-import-baseline"]
+        )
+        XCTAssertEqual(
+            cloudService.savedAcceptedPredecessorOperationIDs,
+            [Set([pendingOutbox.operationID])]
+        )
+        XCTAssertEqual(
+            try repositoryStore.loadSnapshot()?.entries.map(\.title),
+            ["Imported successor"]
+        )
+        XCTAssertNil(try outboxStore.load())
+        let completedReference = try XCTUnwrap(
+            libraryStore.loadCatalog().first { $0.id == repositoryID }
+        )
+        XCTAssertNil(completedReference.pendingCloudUploadGeneration)
+        XCTAssertEqual(
+            completedReference.lastKnownServerRecordChangeTag,
+            "cloud-import-saved-tag"
+        )
+    }
+
     func testRepositoryArchiveRoundTripRestoresSnapshot() async throws {
         let rootURL = makeTempDirectory()
         let sourceStore = LocalRepositoryStore(rootURL: rootURL.appendingPathComponent("source", isDirectory: true))
@@ -245,4 +664,9 @@ final class ArchiveTests: AppStoreTestCase {
             XCTAssertEqual(error.errorDescription, "The selected ZIP file could not be read. Choose it again and retry.")
         }
     }
+}
+
+private enum ArchiveTestError: Error {
+    case cleanupFailed
+    case uploadFailed
 }

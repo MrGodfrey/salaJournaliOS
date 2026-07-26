@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 nonisolated struct LocalRepositoryStore {
@@ -40,7 +41,10 @@ nonisolated struct LocalRepositoryStore {
         return try decoder.decode(RepositorySnapshot.self, from: Data(contentsOf: archiveURL))
     }
 
-    func saveSnapshot(_ snapshot: RepositorySnapshot) throws {
+    func saveSnapshot(
+        _ snapshot: RepositorySnapshot,
+        pruningUnreferencedImages shouldPruneUnreferencedImages: Bool = true
+    ) throws {
         try ensureDirectories()
 
         let encoder = JSONEncoder()
@@ -48,7 +52,9 @@ nonisolated struct LocalRepositoryStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(snapshot)
         try data.write(to: archiveURL, options: .atomic)
-        try removeUnreferencedImages(referencedBy: snapshot.entries.map(\.imageReference))
+        if shouldPruneUnreferencedImages {
+            try removeUnreferencedImages(referencedBy: snapshot.entries.map(\.imageReference))
+        }
     }
 
     func makeSnapshot(
@@ -121,6 +127,31 @@ nonisolated struct LocalRepositoryStore {
         }
 
         return fileURL
+    }
+
+    func pruneUnreferencedImages(referencedBy entries: [EntryRecord]) throws {
+        try removeUnreferencedImages(referencedBy: entries.map(\.imageReference))
+    }
+
+    func imageContentHashes(
+        referencedBy entries: [EntryRecord]
+    ) throws -> [String: String] {
+        var hashes: [String: String] = [:]
+        for reference in Set(
+            entries.compactMap {
+                normalizedLocalImageReference($0.imageReference)
+            }
+        ) {
+            let fileURL = imagesURL.appendingPathComponent(reference)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                continue
+            }
+            let digest = SHA256.hash(data: try Data(contentsOf: fileURL))
+                .map { String(format: "%02x", $0) }
+                .joined()
+            hashes[reference] = digest
+        }
+        return hashes
     }
 
     func exportableFileURLs() throws -> [URL] {

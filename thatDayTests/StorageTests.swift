@@ -2,6 +2,85 @@ import XCTest
 @testable import thatDay
 
 final class StorageTests: AppStoreTestCase {
+    func testLoadCatalogPreservesLocalCloudSyncMetadataAcrossRestart() throws {
+        let rootURL = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(rootURL: rootURL)
+        let localStore = libraryStore.repositoryStore(for: RepositoryReference.localRepositoryID)
+        let snapshotUpdatedAt = fixtureDate("2026-07-26T09:00:00Z")
+        let subscribedAt = fixtureDate("2026-07-20T09:00:00Z")
+        let lastOpenedAt = fixtureDate("2026-07-21T09:00:00Z")
+        let serverModifiedAt = fixtureDate("2026-07-22T09:00:00Z")
+        let pendingUploadAt = fixtureDate("2026-07-23T09:00:00Z")
+        let conflictDetectedAt = fixtureDate("2026-07-24T09:00:00Z")
+        let zoneUnavailableAt = fixtureDate("2026-07-25T09:00:00Z")
+        let subscriptionValidatedAt = fixtureDate("2026-07-26T08:00:00Z")
+        let ownerDescriptor = RepositoryDescriptor(
+            zoneName: "owner-zone",
+            zoneOwnerName: "_defaultOwner_",
+            shareRecordName: "owner-share",
+            role: .owner
+        )
+        let persistedReference = RepositoryReference(
+            id: RepositoryReference.localRepositoryID,
+            displayName: "Our Journal",
+            descriptor: .local,
+            source: .local,
+            lastKnownSnapshotUpdatedAt: fixtureDate("2026-07-19T09:00:00Z"),
+            subscribedAt: subscribedAt,
+            lastOpenedAt: lastOpenedAt,
+            lastKnownServerRecordChangeTag: "server-tag",
+            lastKnownServerModifiedAt: serverModifiedAt,
+            pendingCloudUploadAt: pendingUploadAt,
+            pendingCloudUploadGeneration: 7,
+            pendingCloudUploadBaseChangeTag: "base-tag",
+            cloudUploadConflictServerChangeTag: "conflict-tag",
+            cloudUploadConflictDetectedAt: conflictDetectedAt,
+            cloudZoneUnavailableAt: zoneUnavailableAt,
+            subscriptionConfigurationVersion: 2,
+            subscriptionValidatedAt: subscriptionValidatedAt
+        )
+
+        try localStore.saveDescriptor(ownerDescriptor)
+        try localStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [makeEntry(title: "Persisted Entry", happenedAt: snapshotUpdatedAt)],
+                updatedAt: snapshotUpdatedAt
+            )
+        )
+        try libraryStore.saveCatalog([persistedReference])
+
+        let restartedStore = RepositoryLibraryStore(rootURL: rootURL)
+        let reloadedReference = try XCTUnwrap(
+            restartedStore.loadCatalog().first(where: {
+                $0.id == RepositoryReference.localRepositoryID
+            })
+        )
+
+        XCTAssertEqual(reloadedReference.displayName, "Our Journal")
+        XCTAssertEqual(reloadedReference.source, .local)
+        XCTAssertEqual(reloadedReference.descriptor, ownerDescriptor)
+        XCTAssertEqual(reloadedReference.lastKnownSnapshotUpdatedAt, snapshotUpdatedAt)
+        XCTAssertEqual(reloadedReference.subscribedAt, subscribedAt)
+        XCTAssertEqual(reloadedReference.lastOpenedAt, lastOpenedAt)
+        XCTAssertEqual(reloadedReference.lastKnownServerRecordChangeTag, "server-tag")
+        XCTAssertEqual(reloadedReference.lastKnownServerModifiedAt, serverModifiedAt)
+        XCTAssertEqual(reloadedReference.pendingCloudUploadAt, pendingUploadAt)
+        XCTAssertEqual(reloadedReference.pendingCloudUploadGeneration, 7)
+        XCTAssertEqual(reloadedReference.pendingCloudUploadBaseChangeTag, "base-tag")
+        XCTAssertEqual(reloadedReference.cloudUploadConflictServerChangeTag, "conflict-tag")
+        XCTAssertEqual(reloadedReference.cloudUploadConflictDetectedAt, conflictDetectedAt)
+        XCTAssertEqual(reloadedReference.cloudZoneUnavailableAt, zoneUnavailableAt)
+        XCTAssertEqual(reloadedReference.subscriptionConfigurationVersion, 2)
+        XCTAssertEqual(reloadedReference.subscriptionValidatedAt, subscriptionValidatedAt)
+
+        let secondRestartReference = try XCTUnwrap(
+            RepositoryLibraryStore(rootURL: rootURL)
+                .loadCatalog()
+                .first(where: { $0.id == RepositoryReference.localRepositoryID })
+        )
+        XCTAssertEqual(secondRestartReference, reloadedReference)
+    }
+
     func testLoadPreferencesDefaultsNotificationScopeForLegacyPreferencesFile() throws {
         let rootURL = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: rootURL)

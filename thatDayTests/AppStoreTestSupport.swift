@@ -142,20 +142,62 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     var acceptedSharedRepository: AcceptedSharedRepository?
     var loadMetadataError: Error?
     var loadSnapshotError: Error?
+    var saveSnapshotError: Error?
+    var recreateSnapshotError: Error?
+    var ensureSubscriptionError: Error?
+    var acknowledgeZoneChangesError: Error?
+    var makeSharingControllerError: Error?
+    var metadataRecordChangeTag: String?
+    var metadataServerModifiedAt: Date?
+    var savedRecordChangeTag: String?
+    var recreateSnapshotResult: SavedRepositorySnapshot?
     var savedSnapshots: [RepositorySnapshot] = []
+    var savedDescriptors: [RepositoryDescriptor] = []
+    var savedExpectedRecordChangeTags: [String?] = []
+    var savedAcceptedPredecessorOperationIDs: [Set<UUID>] = []
+    var recreatedSnapshots: [RepositorySnapshot] = []
+    var recreatedDescriptors: [RepositoryDescriptor] = []
+    var recreatedAcceptedPredecessorOperationIDs: [Set<UUID>] = []
+    var sharingControllerDescriptors: [RepositoryDescriptor] = []
+    var sharingControllerSnapshots: [RepositorySnapshot] = []
     var loadedMetadataDescriptors: [RepositoryDescriptor] = []
     var loadedDescriptors: [RepositoryDescriptor] = []
+    var availableImageContentHashesByLoad: [[String: String]] = []
     var ensuredSubscriptionDescriptors: [RepositoryDescriptor] = []
+    var changedZoneIDsByScope: [CloudDatabaseScope: Set<CloudRepositoryZoneIdentity>] = [:]
+    var deletedZonesByScope: [CloudDatabaseScope: Set<CloudRepositoryZoneDeletion>] = [:]
+    var deletedZoneIDsByScope: [CloudDatabaseScope: Set<CloudRepositoryZoneIdentity>] = [:]
+    var changedZoneScopeRequests: [CloudDatabaseScope] = []
+    var acknowledgedZoneIDsByScope: [CloudDatabaseScope: [Set<CloudRepositoryZoneIdentity>]] = [:]
+    var acknowledgedDeletedZonesByScope: [CloudDatabaseScope: [Set<CloudRepositoryZoneDeletion>]] = [:]
+    var acknowledgedDeletedZoneIDsByScope: [CloudDatabaseScope: [Set<CloudRepositoryZoneIdentity>]] = [:]
+    var resetRemoteChangeTrackingCount = 0
     var acceptedShareURLs: [URL] = []
     var acceptedShareMetadataCount = 0
+    var loadMetadataStartedExpectation: XCTestExpectation?
     var saveSnapshotStartedExpectation: XCTestExpectation?
     var saveSnapshotFinishedExpectation: XCTestExpectation?
+    var recreateSnapshotStartedExpectation: XCTestExpectation?
+    var recreateSnapshotFinishedExpectation: XCTestExpectation?
+    var pauseLoadMetadata = false
     var pauseSaveSnapshot = false
+    var pauseRecreateSnapshot = false
 
+    private var loadMetadataContinuation: CheckedContinuation<Void, Never>?
     private var saveSnapshotContinuation: CheckedContinuation<Void, Never>?
+    private var recreateSnapshotContinuation: CheckedContinuation<Void, Never>?
 
     func loadSnapshotMetadata(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshotMetadata {
         loadedMetadataDescriptors.append(descriptor)
+
+        if pauseLoadMetadata, loadMetadataContinuation == nil {
+            await withCheckedContinuation { continuation in
+                loadMetadataContinuation = continuation
+                loadMetadataStartedExpectation?.fulfill()
+            }
+        } else {
+            loadMetadataStartedExpectation?.fulfill()
+        }
 
         if let loadMetadataError {
             throw loadMetadataError
@@ -164,11 +206,19 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         if let loadedSnapshot = snapshot(for: descriptor) {
             return RepositorySnapshotMetadata(
                 updatedAt: loadedSnapshot.updatedAt,
-                entryCount: loadedSnapshot.entries.count
+                entryCount: loadedSnapshot.entries.count,
+                serverModifiedAt: metadataServerModifiedAt,
+                recordChangeTag: metadataRecordChangeTag
             )
         }
 
         throw CloudRepositoryError.repositoryNotFound
+    }
+
+    func resumePausedLoadMetadata() {
+        loadMetadataContinuation?.resume()
+        loadMetadataContinuation = nil
+        pauseLoadMetadata = false
     }
 
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot {
@@ -185,8 +235,28 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         throw CloudRepositoryError.repositoryNotFound
     }
 
-    func saveSnapshot(_ snapshot: RepositorySnapshot, using descriptor: RepositoryDescriptor) async throws -> RepositoryDescriptor {
+    func loadSnapshot(
+        using descriptor: RepositoryDescriptor,
+        availableImageContentHashes: [String: String]
+    ) async throws -> RepositorySnapshot {
+        availableImageContentHashesByLoad.append(
+            availableImageContentHashes
+        )
+        return try await loadSnapshot(using: descriptor)
+    }
+
+    func saveSnapshot(
+        _ snapshot: RepositorySnapshot,
+        using descriptor: RepositoryDescriptor,
+        expectedRecordChangeTag: String?,
+        acceptedPredecessorOperationIDs: Set<UUID>
+    ) async throws -> SavedRepositorySnapshot {
         savedSnapshots.append(snapshot)
+        savedDescriptors.append(descriptor)
+        savedExpectedRecordChangeTags.append(expectedRecordChangeTag)
+        savedAcceptedPredecessorOperationIDs.append(
+            acceptedPredecessorOperationIDs
+        )
 
         if pauseSaveSnapshot {
             await withCheckedContinuation { continuation in
@@ -197,18 +267,77 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
             saveSnapshotStartedExpectation?.fulfill()
         }
 
+        if let saveSnapshotError {
+            saveSnapshotFinishedExpectation?.fulfill()
+            throw saveSnapshotError
+        }
+
         if descriptor.role == .local {
             saveSnapshotFinishedExpectation?.fulfill()
-            return RepositoryDescriptor(
-                zoneName: "mock-zone",
-                zoneOwnerName: CKCurrentUserDefaultName,
-                shareRecordName: "mock-share",
-                role: .owner
+            return SavedRepositorySnapshot(
+                descriptor: RepositoryDescriptor(
+                    zoneName: "mock-zone",
+                    zoneOwnerName: CKCurrentUserDefaultName,
+                    shareRecordName: "mock-share",
+                    role: .owner
+                ),
+                serverModifiedAt: metadataServerModifiedAt,
+                recordChangeTag: savedRecordChangeTag ??
+                    metadataRecordChangeTag ??
+                    "mock-save-\(savedSnapshots.count)"
             )
         }
 
         saveSnapshotFinishedExpectation?.fulfill()
-        return descriptor
+        return SavedRepositorySnapshot(
+            descriptor: descriptor,
+            serverModifiedAt: metadataServerModifiedAt,
+            recordChangeTag: savedRecordChangeTag ??
+                metadataRecordChangeTag ??
+                "mock-save-\(savedSnapshots.count)"
+        )
+    }
+
+    func recreateSnapshotAfterEncryptedDataReset(
+        _ snapshot: RepositorySnapshot,
+        using descriptor: RepositoryDescriptor,
+        acceptedPredecessorOperationIDs: Set<UUID>
+    ) async throws -> SavedRepositorySnapshot {
+        recreatedSnapshots.append(snapshot)
+        recreatedDescriptors.append(descriptor)
+        recreatedAcceptedPredecessorOperationIDs.append(
+            acceptedPredecessorOperationIDs
+        )
+
+        if pauseRecreateSnapshot {
+            await withCheckedContinuation { continuation in
+                recreateSnapshotContinuation = continuation
+                recreateSnapshotStartedExpectation?.fulfill()
+            }
+        } else {
+            recreateSnapshotStartedExpectation?.fulfill()
+        }
+
+        if let recreateSnapshotError {
+            recreateSnapshotFinishedExpectation?.fulfill()
+            throw recreateSnapshotError
+        }
+
+        let result = recreateSnapshotResult ?? SavedRepositorySnapshot(
+            descriptor: descriptor,
+            serverModifiedAt: metadataServerModifiedAt,
+            recordChangeTag: savedRecordChangeTag ??
+                metadataRecordChangeTag ??
+                "mock-recreate-\(recreatedSnapshots.count)"
+        )
+        recreateSnapshotFinishedExpectation?.fulfill()
+        return result
+    }
+
+    func resumePausedRecreateSnapshot() {
+        recreateSnapshotContinuation?.resume()
+        recreateSnapshotContinuation = nil
+        pauseRecreateSnapshot = false
     }
 
     func resumePausedSaveSnapshot() {
@@ -217,12 +346,48 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         pauseSaveSnapshot = false
     }
 
-    func shareURL(using descriptor: RepositoryDescriptor, snapshot: RepositorySnapshot) async throws -> URL {
-        URL(string: "https://www.icloud.com/share/mock-share")!
-    }
-
     func ensureRepositorySubscription(using descriptor: RepositoryDescriptor) async throws {
         ensuredSubscriptionDescriptors.append(descriptor)
+        if let ensureSubscriptionError {
+            throw ensureSubscriptionError
+        }
+    }
+
+    func pendingRepositoryZoneChanges(
+        in scope: CloudDatabaseScope
+    ) async throws -> CloudRepositoryDatabaseChanges {
+        changedZoneScopeRequests.append(scope)
+        let legacyDeletedZones = Set(
+            (deletedZoneIDsByScope[scope] ?? []).map {
+                CloudRepositoryZoneDeletion(zoneID: $0, reason: .deleted)
+            }
+        )
+        return CloudRepositoryDatabaseChanges(
+            modifiedZoneIDs: changedZoneIDsByScope[scope] ?? [],
+            deletedZones: (deletedZonesByScope[scope] ?? []).union(legacyDeletedZones)
+        )
+    }
+
+    func acknowledgeRepositoryZoneChanges(
+        _ changes: CloudRepositoryDatabaseChanges,
+        in scope: CloudDatabaseScope
+    ) async throws {
+        acknowledgedZoneIDsByScope[scope, default: []].append(changes.modifiedZoneIDs)
+        acknowledgedDeletedZonesByScope[scope, default: []].append(changes.deletedZones)
+        let deletedZoneIDs = Set(changes.deletedZones.map(\.zoneID))
+        acknowledgedDeletedZoneIDsByScope[scope, default: []].append(deletedZoneIDs)
+
+        if let acknowledgeZoneChangesError {
+            throw acknowledgeZoneChangesError
+        }
+
+        changedZoneIDsByScope[scope]?.subtract(changes.modifiedZoneIDs)
+        deletedZonesByScope[scope]?.subtract(changes.deletedZones)
+        deletedZoneIDsByScope[scope]?.subtract(deletedZoneIDs)
+    }
+
+    func resetRemoteChangeTracking() async throws {
+        resetRemoteChangeTrackingCount += 1
     }
 
     @MainActor
@@ -231,7 +396,14 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         snapshot: RepositorySnapshot,
         access: ShareAccessOption
     ) async throws -> UICloudSharingController {
-        UICloudSharingController(
+        sharingControllerDescriptors.append(descriptor)
+        sharingControllerSnapshots.append(snapshot)
+
+        if let makeSharingControllerError {
+            throw makeSharingControllerError
+        }
+
+        return UICloudSharingController(
             share: CKShare(recordZoneID: CKRecordZone.ID(zoneName: "mock-zone", ownerName: CKCurrentUserDefaultName)),
             container: CKContainer(identifier: "iCloud.yu.thatDay")
         )

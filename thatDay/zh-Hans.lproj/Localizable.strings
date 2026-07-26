@@ -3,6 +3,7 @@
 "%@ and %lld more entries" = "%@，以及另外 %lld 条文章";
 "%@ has %lld updates" = "%@ 有 %lld 条更新";
 "%@ updated" = "%@ 已更新";
+"%lld entries were deleted." = "%lld 篇文章已被删除。";
 "%@ will be saved as your personal default. Repositories whose owner selects Journal or Blog will ignore this setting." = "%@ 会保存为你的个人默认值；如果仓库所有者将范围设为日记或博客，该设置不会生效。";
 "%@'s Shared Repository" = "%@ 的共享仓库";
 "A file path in the repository is invalid, so import or export cannot continue." = "仓库中的文件路径无效，因此无法继续导入或导出。";
@@ -11,6 +12,7 @@
 "Add Image" = "添加图片";
 "All" = "全部";
 "All entries and images in the current repository will be deleted. This action cannot be undone." = "当前仓库中的所有文章和图片都会被删除，此操作无法撤销。";
+"An entry was deleted." = "一篇文章已被删除。";
 "An unexpected error occurred." = "发生了意外错误。";
 "At least one blog tag must remain." = "至少要保留一个博客标签。";
 "Authenticate to view the current repository." = "验证后即可查看当前仓库。";
@@ -96,7 +98,8 @@
 "No journal entries on this day" = "这一天还没有日记";
 "No posts in %@" = "%@ 下暂无文章";
 "Not selected" = "未选中";
-"Notification permission is disabled, so shared repository updates cannot be delivered." = "通知权限未开启，因此无法接收共享仓库更新。";
+"Notification permission is disabled, so visible shared repository alerts cannot be shown. Background synchronization stays enabled." = "通知权限未开启，因此无法显示共享仓库更新提醒；后台同步仍会保持开启。";
+"Background sync stays enabled even when alerts are off." = "即使关闭提醒，后台同步也会保持开启。";
 "Notifications" = "通知";
 "Notice" = "提示";
 "OK" = "好";
@@ -141,10 +144,12 @@
 "The current repository is read-only and cannot import content." = "当前仓库是只读的，不能导入内容。";
 "The current repository is read-only and cannot save changes." = "当前仓库是只读的，不能保存更改。";
 "The current shared repository is read-only and cannot be changed." = "当前共享仓库是只读的，不能修改。";
+"The shared repository is no longer available in iCloud. Its cached content is kept read-only on this device." = "这个共享仓库已无法从 iCloud 访问；本设备会保留一份只读缓存。";
 "The imported ZIP is not a valid repository exported by thatDay." = "导入的 ZIP 不是 thatDay 导出的有效仓库文件。";
 "The owner allows each member to use their own Push Updates preference for this repository." = "仓库所有者允许每个成员在这个仓库里使用自己的 Push Updates 偏好。";
 "The owner locked this repository to %@. Your personal Push Updates preference is ignored here until the owner switches back to All." = "仓库所有者已将这个仓库锁定为 %@；在所有者切回 All 之前，你的个人 Push Updates 偏好在这里都会被忽略。";
 "The repository data in CloudKit could not be recognized." = "无法识别 CloudKit 中的仓库数据。";
+"The repository update is too large to upload safely in one atomic CloudKit operation." = "这次仓库更新过大，无法通过一次原子 CloudKit 操作安全上传。";
 "The selected image could not be recognized. Choose a different image." = "无法识别所选图片，请换一张试试。";
 "The selected ZIP file could not be read. Choose it again and retry." = "无法读取所选 ZIP 文件，请重新选择后再试。";
 "The current repository is read-only, so blog tags can be viewed here but cannot be changed." = "当前仓库是只读的，因此这里只能查看博客标签，不能修改。";
@@ -154,6 +159,8 @@
 "This is still your personal default, but the current repository follows the owner's %@ rule instead." = "这仍然是你的个人默认设置，但当前仓库会改为遵循所有者设定的 %@ 规则。";
 "This is your personal default. It applies to the current repository because the owner allows All." = "这是你的个人默认设置。由于仓库所有者允许 All，它会应用到当前仓库。";
 "This repository is locked to %@ for every member. Personal Push Updates preferences are ignored here until you switch back to All." = "这个仓库已对所有成员锁定为 %@；在你切回 All 之前，这里的个人 Push Updates 偏好都会被忽略。";
+"This repository changed in iCloud before the pending local update could upload. Both copies were kept; automatic upload is paused to prevent data loss." = "本地待上传更改完成前，iCloud 中的仓库已被其他设备更新。两份内容都已保留；为避免数据丢失，自动上传已暂停。";
+"This iCloud repository was purged. Its local cached data was deleted as requested by iCloud." = "这个 iCloud 仓库已被彻底清除；按照 iCloud 的要求，本机缓存数据也已删除。";
 "This tag is not used by any blog posts and will be removed from the current repository." = "这个标签当前没有被任何博客文章使用，将从当前仓库移除。";
 "this tag" = "该标签";
 "Time Zone" = "时区";
@@ -163,6 +170,7 @@
 "Try Again" = "重试";
 "Try another date, or add a new entry for today." = "试试其他日期，或为今天新建一篇文章。";
 "Unlock thatDay" = "解锁 thatDay";
+"Unavailable · Cached Read-Only" = "已不可用 · 本机只读缓存";
 "Use Passcode" = "使用密码";
 "View Only" = "仅查看";
 "Watching" = "观影";

@@ -112,7 +112,20 @@ nonisolated struct RepositoryLibraryStore {
     }
 
     private func normalizeCatalog(_ references: [RepositoryReference]) throws -> [RepositoryReference] {
-        let localReference = try makeLocalReference()
+        let localReference: RepositoryReference
+        if var persistedLocalReference = references.first(where: {
+            $0.id == RepositoryReference.localRepositoryID
+        }) {
+            let localStore = repositoryStore(for: RepositoryReference.localRepositoryID)
+            persistedLocalReference.descriptor =
+                try localStore.loadDescriptor() ?? persistedLocalReference.descriptor
+            persistedLocalReference.lastKnownSnapshotUpdatedAt =
+                try localStore.loadSnapshot()?.updatedAt
+            localReference = persistedLocalReference
+        } else {
+            localReference = try makeLocalReference()
+        }
+
         var normalized = references.filter { $0.id != RepositoryReference.localRepositoryID }
         normalized.insert(localReference, at: 0)
 

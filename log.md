@@ -960,3 +960,39 @@
     - `xcresult`: `/tmp/thatDay-timezone-full-tests/Logs/Test/Test-thatDay-2026.07.16_23-54-46-+0100.xcresult`
   - `plutil -lint thatDay/zh-Hans.lproj/Localizable.strings`：通过
   - `git diff --check`：通过
+
+## 2026-07-26 03:17
+
+- 重构 CloudKit 共享仓库的接收与追赶链路：
+  - 修复远端静默推送只排队、却提前向 iOS 返回成功的问题；现在会在系统授予的后台窗口内真正处理 private / shared database 变化，并按结果返回 `newData / noData / failed`
+  - 为 private / shared database 持久保存 `CKServerChangeToken` 和待处理 zone 收件箱；推送可合并或漏达时，应用启动、回到前台、手动刷新与低频 `BGAppRefreshTask` 都会从游标增量追赶
+  - 应用启动立即同步；回到前台使用 `30` 秒去抖；后台任务一开始先提交下一次 successor，避免本次被系统终止后失去后续兜底
+  - CloudKit 订阅改为始终启用且与可见通知权限解耦；按 owner 清理旧 private subscription，并保留 shared database 的单份订阅
+- 遵循 CloudKit 限流与后台调度约束：
+  - 递归识别 partial failure 中的 retry-after，跨启动持久化绝对冷却截止时间；同一批多仓库 / 多订阅请求遇到限流后立即停止，避免 retry storm
+  - 前台只安排一个可取消的到期唤醒；后台刷新 earliest date 不早于更长的 CloudKit 冷却时间
+  - 可见通知只在实际发现共享内容变化且用户开启提醒时发送；静默推送与后台刷新仍是 iOS best-effort 调度，强制退出后必须等用户再次打开应用
+- 补齐共享编辑、崩溃恢复与冲突保护：
+  - 新增持久化上传 outbox、唯一 operation ID 与 predecessor 链；本地保存、首次分享、重启补传和 encrypted-data-reset 恢复统一走仓库级单写者队列
+  - 上传使用服务端 `recordChangeTag` 和 `.ifServerRecordUnchanged`，不会静默覆盖另一台设备刚提交的日记；远端成功但本地 receipt 尚未落盘时，也能通过 operation ID 恢复
+  - 导入 ZIP 改为同卷暂存、完整校验、安全替换和事务标记恢复；清理失败时 commit-forward，避免已安装新仓库却回报整体失败
+  - `purged`、普通删除与 `encryptedDataReset` 分别按 CloudKit 语义处理；reset ACK 在编辑、导入、代际切换和重启后仍可恢复，并且只在本地 receipt / catalog 已持久提交后确认
+- 优化共享图片同步：
+  - 快照格式升级为 v4，根记录保存图片 SHA-256 manifest；纯文字修改即使引用 300 张图片也不会查询或上传未变化图片
+  - 新增、同引用替换和删除图片与根记录原子提交；下载只复用哈希一致的本地缓存，并校验根哈希、图片记录哈希和实际文件内容
+  - 兼容 v3 / 旧版同名图片原地替换，并检查历史 orphan 图片记录以复用 change tag，避免升级后稳定触发 `serverRecordChanged`
+- 文档、设置与版本：
+  - `Info.plist` 增加 `remote-notification`、`fetch` 和后台刷新任务标识；README 补充当前同步行为、Apple 机制边界、限流策略、恢复语义和测试入口
+  - Marketing Version 更新为 `1.2.9`，build number 更新为 `2`
+- 验证记录：
+  - 最终只读发布审查未发现剩余 P0 / P1
+  - 单元测试 `146/146` 通过，零失败、零跳过；xcresult：`/tmp/thatDay-full-unit-release-final/Logs/Test/Test-thatDay-2026.07.26_02-58-27-+0100.xcresult`
+  - UI 测试 `32/32` 通过（常规 `24/24`、Launch `8/8`），零失败；xcresult：`/tmp/thatDay-ui-release-final/Logs/Test/Test-thatDay-2026.07.26_03-00-47-+0100.xcresult`
+  - `plutil -lint thatDay/Info.plist thatDay/zh-Hans.lproj/Localizable.strings`：通过
+  - `git diff --check`：通过
+  - 无签名 generic iOS Release 构建：通过
+  - 签名归档：通过，归档位于 `/tmp/thatDay-1.2.9.xcarchive`
+- App Store Connect 发布：
+  - Xcode 图形账户凭据失效时首次导出报 `Failed to Use Accounts`；改用本机 App Store Connect API Key 后 IPA 上传成功
+  - 构建 `1.2.9 (2)` 处理状态为 `VALID`，已创建商店版本、绑定构建并写入中英文更新说明
+  - 使用 Apple 当前 Review Submissions 接口提交审核，发布方式为审核通过后自动发布；提交状态为 `WAITING_FOR_REVIEW`
