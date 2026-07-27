@@ -39,6 +39,9 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
     var contentDigest: String
     var createdAt: Date
     var receipt: CloudUploadReceipt?
+    // Proves a completed local-to-owner transition when a newer generation
+    // became durable before the catalog could be promoted to owner.
+    var sharePreparationReceipt: CloudUploadReceipt?
     var encryptedResetAcknowledgement: EncryptedResetAcknowledgement?
 
     init(
@@ -86,6 +89,7 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
         contentDigest = try Self.digest(for: uploadSnapshot)
         self.createdAt = createdAt
         receipt = nil
+        sharePreparationReceipt = nil
         self.encryptedResetAcknowledgement =
             encryptedResetAcknowledgement
     }
@@ -122,6 +126,15 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
               hasValidSnapshotDigest,
               hasValidBaseSnapshot else {
             throw CloudRepositoryError.invalidRepositoryData
+        }
+        if let sharePreparationReceipt {
+            guard mode == .normal,
+                  descriptor.role == .owner,
+                  sharePreparationReceipt.descriptor == descriptor,
+                  baseRecordChangeTag ==
+                    sharePreparationReceipt.recordChangeTag else {
+                throw CloudRepositoryError.invalidRepositoryData
+            }
         }
         try Self.validateEmbeddedImageCoverage(in: snapshot)
         var validatedRecord = self
@@ -171,6 +184,12 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
                 attemptedAt:
                     encryptedResetAcknowledgement?.attemptedAt
             )
+    }
+
+    mutating func recordSharePreparationReceipt(
+        _ receipt: CloudUploadReceipt
+    ) {
+        sharePreparationReceipt = receipt
     }
 
     mutating func markEncryptedResetAcknowledgementAttempted(
@@ -319,20 +338,135 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated struct CloudUploadOutboxStore: Sendable {
-    private static let filename = "pending-cloud-upload.json"
-
-    let fileURL: URL
-
-    init(repositoryRootURL: URL) {
-        fileURL = repositoryRootURL.appendingPathComponent(Self.filename)
-    }
-
-    func load() throws -> CloudUploadOutboxRecord? {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+nonisolated extension CloudUploadOutboxRecord {
+    func authorizedDescriptor(
+        for reference: RepositoryReference
+    ) -> RepositoryDescriptor? {
+        guard repositoryID == reference.id else {
             return nil
         }
 
+        switch mode {
+        case .normal:
+            if reference.id ==
+                    RepositoryReference.localRepositoryID,
+               reference.descriptor.role == .local,
+               descriptor.role == .owner,
+               let sharePreparationReceipt,
+               sharePreparationReceipt.descriptor ==
+                    descriptor,
+               baseRecordChangeTag ==
+                    sharePreparationReceipt.recordChangeTag {
+                return descriptor
+            }
+            guard descriptor.isCloudBacked,
+                  descriptor.role.canEdit,
+                  reference.descriptor.isCloudBacked,
+                  reference.descriptor.role.canEdit,
+                  descriptor.role == reference.descriptor.role,
+                  descriptor.zoneID == reference.descriptor.zoneID else {
+                return nil
+            }
+            return reference.descriptor
+        case .prepareShare:
+            if let receipt {
+                if reference.descriptor.role == .owner,
+                   reference.descriptor.zoneID ==
+                    receipt.descriptor.zoneID {
+                    return reference.descriptor
+                }
+                guard reference.id ==
+                        RepositoryReference.localRepositoryID,
+                      reference.descriptor.role == .local,
+                      descriptor.role == .local,
+                      receipt.descriptor.role == .owner else {
+                    return nil
+                }
+                return .local
+            }
+            guard reference.id ==
+                    RepositoryReference.localRepositoryID,
+                  reference.descriptor.role == .local,
+                  descriptor.role == .local else {
+                return nil
+            }
+            return .local
+        case .recreateAfterEncryptedDataReset:
+            guard descriptor.role == .owner,
+                  reference.descriptor.role == .owner,
+                  descriptor.zoneID ==
+                    reference.descriptor.zoneID else {
+                return nil
+            }
+            return reference.descriptor
+        }
+    }
+}
+
+nonisolated struct SuspendedCloudUpload: Sendable {
+    var record: CloudUploadOutboxRecord?
+    var recoveryURL: URL
+}
+
+nonisolated struct CloudUploadOutboxStore: Sendable {
+    private static let filename = "pending-cloud-upload.json"
+    private static let recoveryDirectoryName =
+        "read-only-upload-recovery"
+
+    let fileURL: URL
+    let recoveryDirectoryURL: URL
+
+    init(repositoryRootURL: URL) {
+        fileURL = repositoryRootURL.appendingPathComponent(Self.filename)
+        recoveryDirectoryURL = repositoryRootURL.appendingPathComponent(
+            Self.recoveryDirectoryName,
+            isDirectory: true
+        )
+    }
+
+    var hasPendingUpload: Bool {
+        FileManager.default.fileExists(atPath: fileURL.path)
+    }
+
+    func load() throws -> CloudUploadOutboxRecord? {
+        guard hasPendingUpload else {
+            return nil
+        }
+
+        return try Self.decode(Data(contentsOf: fileURL))
+    }
+
+    func suspendForReadOnlyAccess() throws
+        -> SuspendedCloudUpload? {
+        guard hasPendingUpload else {
+            return nil
+        }
+
+        let data = try Data(contentsOf: fileURL)
+        let record = try? Self.decode(data)
+        let identifier = record?.operationID.uuidString.lowercased()
+            ?? SHA256.hash(data: data)
+                .map { String(format: "%02x", $0) }
+                .joined()
+        try FileManager.default.createDirectory(
+            at: recoveryDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        let recoveryURL = recoveryDirectoryURL
+            .appendingPathComponent(
+                "pending-cloud-upload-\(identifier).json"
+            )
+        try data.write(to: recoveryURL, options: .atomic)
+        try remove()
+        return SuspendedCloudUpload(
+            record: record,
+            recoveryURL: recoveryURL
+        )
+    }
+
+    private static func decode(
+        _ data: Data
+    ) throws -> CloudUploadOutboxRecord {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom {
             decoder in
@@ -370,7 +504,7 @@ nonisolated struct CloudUploadOutboxStore: Sendable {
             return date
         }
         return try decoder
-            .decode(CloudUploadOutboxRecord.self, from: Data(contentsOf: fileURL))
+            .decode(CloudUploadOutboxRecord.self, from: data)
             .validatingContent()
     }
 

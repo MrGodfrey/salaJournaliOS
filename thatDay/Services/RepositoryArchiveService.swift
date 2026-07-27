@@ -202,7 +202,10 @@ nonisolated struct RepositoryArchiveService {
         }
 
         let sourceFiles = try importStore.exportableFileURLs()
-            .filter { $0.lastPathComponent != repositoryStore.descriptorURL.lastPathComponent }
+            .filter {
+                $0.standardizedFileURL !=
+                    importStore.descriptorURL.standardizedFileURL
+            }
         let totalFiles = max(sourceFiles.count, 1)
         var completedFiles = 0
 

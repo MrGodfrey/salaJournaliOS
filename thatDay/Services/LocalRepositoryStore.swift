@@ -165,9 +165,14 @@ nonisolated struct LocalRepositoryStore {
             files.append(descriptorURL)
         }
 
-        if FileManager.default.fileExists(atPath: imagesURL.path) {
+        func appendRegularFiles(in directoryURL: URL) throws {
+            guard FileManager.default.fileExists(
+                atPath: directoryURL.path
+            ) else {
+                return
+            }
             let enumerator = FileManager.default.enumerator(
-                at: imagesURL,
+                at: directoryURL,
                 includingPropertiesForKeys: [.isRegularFileKey],
                 options: [.skipsHiddenFiles]
             )
@@ -179,8 +184,90 @@ nonisolated struct LocalRepositoryStore {
                 }
             }
         }
+        try appendRegularFiles(in: imagesURL)
+        try appendRegularFiles(
+            in: rootURL.appendingPathComponent(
+                "read-only-upload-recovery",
+                isDirectory: true
+            )
+        )
 
         return files.sorted { $0.path < $1.path }
+    }
+
+    @discardableResult
+    func preserveReadOnlyRecoveryCopy(
+        identifier: String
+    ) throws -> URL {
+        let normalizedIdentifier = identifier
+            .lowercased()
+            .replacingOccurrences(
+                of: "[^a-z0-9-]+",
+                with: "-",
+                options: .regularExpression
+            )
+            .trimmingCharacters(
+                in: CharacterSet(charactersIn: "-")
+            )
+        let recoveryIdentifier =
+            normalizedIdentifier.nilIfEmpty ??
+            UUID().uuidString.lowercased()
+        let recoveryRootURL = rootURL.appendingPathComponent(
+            "read-only-upload-recovery",
+            isDirectory: true
+        )
+        let destinationURL = recoveryRootURL.appendingPathComponent(
+            "cached-repository-\(recoveryIdentifier)",
+            isDirectory: true
+        )
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            return destinationURL
+        }
+
+        try fileManager.createDirectory(
+            at: recoveryRootURL,
+            withIntermediateDirectories: true
+        )
+        let stagingURL = recoveryRootURL.appendingPathComponent(
+            ".cached-repository-\(recoveryIdentifier)-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: stagingURL,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? fileManager.removeItem(at: stagingURL)
+        }
+
+        for sourceURL in [archiveURL, descriptorURL] {
+            guard fileManager.fileExists(
+                atPath: sourceURL.path
+            ) else {
+                continue
+            }
+            try fileManager.copyItem(
+                at: sourceURL,
+                to: stagingURL.appendingPathComponent(
+                    sourceURL.lastPathComponent
+                )
+            )
+        }
+        if fileManager.fileExists(atPath: imagesURL.path) {
+            try fileManager.copyItem(
+                at: imagesURL,
+                to: stagingURL.appendingPathComponent(
+                    "images",
+                    isDirectory: true
+                )
+            )
+        }
+        try fileManager.moveItem(
+            at: stagingURL,
+            to: destinationURL
+        )
+        return destinationURL
     }
 
     func resetContents() throws {

@@ -100,6 +100,117 @@ final class SharingTests: AppStoreTestCase {
     }
 
     @MainActor
+    func testAcceptingReadOnlyShareImmediatelySuspendsOrphanEditorOutbox() async throws {
+        let storageRoot = makeTempDirectory()
+        let libraryStore = RepositoryLibraryStore(
+            rootURL: storageRoot
+        )
+        let localStore = libraryStore.repositoryStore(
+            for: RepositoryReference.localRepositoryID
+        )
+        let acceptedDate = fixtureDate(
+            "2026-04-16T10:00:00Z"
+        )
+        try localStore.saveDescriptor(.local)
+        try localStore.saveSnapshot(
+            RepositorySnapshot(
+                entries: [],
+                updatedAt: acceptedDate
+            )
+        )
+        let editorDescriptor = RepositoryDescriptor(
+            zoneName: "orphan-outbox-zone",
+            zoneOwnerName: "_orphan_outbox_owner_",
+            shareRecordName: "orphan-outbox-share",
+            role: .editor
+        )
+        var viewerDescriptor = editorDescriptor
+        viewerDescriptor.role = .viewer
+        let orphanSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Orphan editor draft",
+                    happenedAt: acceptedDate
+                )
+            ],
+            updatedAt: acceptedDate
+        )
+        let acceptedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Accepted owner copy",
+                    happenedAt:
+                        acceptedDate.addingTimeInterval(60)
+                )
+            ],
+            updatedAt:
+                acceptedDate.addingTimeInterval(60)
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(
+                    for:
+                        viewerDescriptor.storageIdentifier
+                )
+                .rootURL
+        )
+        try outboxStore.save(
+            CloudUploadOutboxRecord(
+                repositoryID:
+                    viewerDescriptor.storageIdentifier,
+                descriptor: editorDescriptor,
+                displayName: "Orphan Shared Repository",
+                snapshot: orphanSnapshot,
+                generation: 1,
+                baseRecordChangeTag: "orphan-base",
+                createdAt: acceptedDate
+            )
+        )
+        XCTAssertFalse(
+            try libraryStore.loadCatalog().contains {
+                $0.id == viewerDescriptor.storageIdentifier
+            }
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.acceptedSharedRepository =
+            AcceptedSharedRepository(
+                descriptor: viewerDescriptor,
+                snapshot: acceptedSnapshot,
+                displayName: "Accepted Read-Only Repository"
+            )
+        cloudService.loadedSnapshot = acceptedSnapshot
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: {
+                acceptedDate.addingTimeInterval(120)
+            }
+        )
+        await store.loadIfNeeded()
+
+        store.incomingShareLink =
+            "https://www.icloud.com/share/orphan-outbox"
+        await store.acceptIncomingShareLink()
+
+        XCTAssertEqual(
+            store.repositoryDescriptor,
+            viewerDescriptor
+        )
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Accepted owner copy"]
+        )
+        XCTAssertTrue(cloudService.savedSnapshots.isEmpty)
+        XCTAssertNil(try outboxStore.load())
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(
+                at: outboxStore.recoveryDirectoryURL,
+                includingPropertiesForKeys: nil
+            ).isEmpty
+        )
+    }
+
+    @MainActor
     func testAcceptingShareMetadataLoadsSharedRepositoryWithoutUsingURLPath() async throws {
         let storageRoot = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)

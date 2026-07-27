@@ -144,6 +144,7 @@
 "The current repository is read-only and cannot import content." = "当前仓库是只读的，不能导入内容。";
 "The current repository is read-only and cannot save changes." = "当前仓库是只读的，不能保存更改。";
 "The current shared repository is read-only and cannot be changed." = "当前共享仓库是只读的，不能修改。";
+"The shared repository is now read-only. Unuploaded changes were kept on this device for recovery and will not be uploaded." = "这个共享仓库现在是只读的。尚未上传的更改已保留在本机以便恢复，并且不会继续上传。";
 "The shared repository is no longer available in iCloud. Its cached content is kept read-only on this device." = "这个共享仓库已无法从 iCloud 访问；本设备会保留一份只读缓存。";
 "The imported ZIP is not a valid repository exported by thatDay." = "导入的 ZIP 不是 thatDay 导出的有效仓库文件。";
 "The owner allows each member to use their own Push Updates preference for this repository." = "仓库所有者允许每个成员在这个仓库里使用自己的 Push Updates 偏好。";

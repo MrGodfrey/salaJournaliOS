@@ -114,7 +114,6 @@ private enum RepositoryLoadBehavior: Equatable, Sendable {
 }
 
 private struct PendingRepositoryCloudSync {
-    var descriptor: RepositoryDescriptor
     var displayName: String
     var mutationCount: Int
 }
@@ -596,7 +595,7 @@ final class AppStore {
         sharedCloudThrottleUntil = preferences.cloudRetryAfter
         scheduleSharedCloudRetryIfNeeded()
         lastSharedRepositoryRefreshAt = preferences.lastSuccessfulCloudRefreshAt
-        if repositories.contains(where: { $0.cloudUploadConflictDetectedAt != nil }) {
+        if hasAuthorizedCloudUploadConflict() {
             alertMessage = Self.userFacingMessage(
                 for: CloudRepositoryError.repositoryConflict(
                     serverRecordChangeTag: nil
@@ -1325,7 +1324,6 @@ final class AppStore {
                 try persistRepositoryCatalog()
                 scheduleCloudSync(
                     repositoryID: repositoryID,
-                    descriptor: .local,
                     displayName: currentRepositoryName,
                     mutationCount: 0
                 )
@@ -1447,6 +1445,9 @@ final class AppStore {
                 deferIncomingShare(url)
                 return
             }
+            await quiesceRepositoryCloudSync(
+                for: accepted.descriptor.storageIdentifier
+            )
             try applyAcceptedShare(accepted)
             incomingShareLink = ""
             try await loadRepository(
@@ -1478,6 +1479,9 @@ final class AppStore {
                 pendingCloudShareMetadata.append(metadata)
                 return
             }
+            await quiesceRepositoryCloudSync(
+                for: accepted.descriptor.storageIdentifier
+            )
             try applyAcceptedShare(accepted)
             try await loadRepository(
                 repositoryID: accepted.descriptor.storageIdentifier,
@@ -2285,6 +2289,9 @@ final class AppStore {
             }
 
             let descriptor = currentReference.descriptor
+            guard descriptor.role.canEdit else {
+                throw CloudRepositoryError.repositoryLocked
+            }
             let outboxStore = cloudUploadOutboxStore(for: repositoryID)
             let existingOutbox = try outboxStore.load()
             previousOutbox = existingOutbox
@@ -2293,7 +2300,9 @@ final class AppStore {
                 existingOutbox?.mode == .prepareShare &&
                 existingOutbox?.receipt == nil
             let shouldCreateCloudOutbox =
-                descriptor.isCloudBacked || isPendingLocalShare
+                (descriptor.isCloudBacked &&
+                 descriptor.role.canEdit) ||
+                isPendingLocalShare
             var successorOutbox: CloudUploadOutboxRecord?
 
             if shouldCreateCloudOutbox {
@@ -2386,12 +2395,11 @@ final class AppStore {
             invalidateImageViews()
             transferProgress = nil
 
-            if let successorOutbox,
+            if successorOutbox != nil,
                repositoryReference(for: repositoryID)?
                 .cloudUploadConflictDetectedAt == nil {
                 scheduleCloudSync(
                     repositoryID: repositoryID,
-                    descriptor: successorOutbox.descriptor,
                     displayName: repositoryName,
                     mutationCount: 1
                 )
@@ -2586,16 +2594,48 @@ final class AppStore {
             let repositoryStore = libraryStore.repositoryStore(for: reference.id)
             let outboxStore = cloudUploadOutboxStore(for: reference.id)
 
+            if reference.descriptor.role == .viewer {
+                if try suspendCloudUploadForReadOnlyAccess(
+                    repositoryID: reference.id,
+                    authoritativeDescriptor:
+                        reference.descriptor
+                ) {
+                    didChangeCatalog = true
+                } else {
+                    try repositoryStore.saveDescriptor(
+                        reference.descriptor
+                    )
+                }
+                continue
+            }
+
             if let outbox = try outboxStore.load() {
                 guard outbox.repositoryID == reference.id else {
                     throw CloudRepositoryError.invalidRepositoryData
+                }
+                guard let authorizedDescriptor =
+                        outbox.authorizedDescriptor(
+                            for: reference
+                        ) else {
+                    _ = try outboxStore
+                        .suspendForReadOnlyAccess()
+                    clearCloudUploadTracking(
+                        atRepositoryIndex: index
+                    )
+                    try repositoryStore.saveDescriptor(
+                        reference.descriptor
+                    )
+                    didChangeCatalog = true
+                    continue
                 }
 
                 if let receipt = outbox.receipt {
                     try stageCloudUploadReceiptCommit(
                         outbox,
                         receipt: receipt,
-                        repositoryIndex: index
+                        repositoryIndex: index,
+                        authoritativeDescriptor:
+                            authorizedDescriptor
                     )
                     if outbox.mode != .recreateAfterEncryptedDataReset,
                        outbox.encryptedResetAcknowledgement == nil {
@@ -2603,8 +2643,11 @@ final class AppStore {
                     }
                 } else {
                     try repositoryStore.saveCloudSnapshot(outbox.snapshot)
-                    try repositoryStore.saveDescriptor(outbox.descriptor)
-                    repositories[index].descriptor = outbox.descriptor
+                    try repositoryStore.saveDescriptor(
+                        authorizedDescriptor
+                    )
+                    repositories[index].descriptor =
+                        authorizedDescriptor
                     repositories[index].lastKnownSnapshotUpdatedAt = outbox.snapshot.updatedAt
                     repositories[index].pendingCloudUploadAt = outbox.createdAt
                     repositories[index].pendingCloudUploadGeneration = outbox.generation
@@ -2628,7 +2671,8 @@ final class AppStore {
                 continue
             }
 
-            guard reference.descriptor.isCloudBacked else {
+            guard reference.descriptor.isCloudBacked,
+                  reference.descriptor.role.canEdit else {
                 continue
             }
 
@@ -2661,6 +2705,10 @@ final class AppStore {
             repositories[index].pendingCloudUploadGeneration = migratedOutbox.generation
             repositories[index].pendingCloudUploadBaseChangeTag =
                 migratedOutbox.baseRecordChangeTag
+            repositories[index]
+                .cloudUploadConflictServerChangeTag = nil
+            repositories[index]
+                .cloudUploadConflictDetectedAt = nil
             didChangeCatalog = true
         }
 
@@ -2673,10 +2721,119 @@ final class AppStore {
         }
     }
 
+    @discardableResult
+    private func suspendCloudUploadForReadOnlyAccess(
+        repositoryID: String,
+        authoritativeDescriptor: RepositoryDescriptor
+    ) throws -> Bool {
+        let repositoryStore = libraryStore.repositoryStore(
+            for: repositoryID
+        )
+        let outboxStore = cloudUploadOutboxStore(
+            for: repositoryID
+        )
+        let hadActiveOutbox = outboxStore.hasPendingUpload
+        guard let index = repositories.firstIndex(where: {
+            $0.id == repositoryID
+        }) else {
+            if hadActiveOutbox {
+                _ = try outboxStore.suspendForReadOnlyAccess()
+            }
+            try repositoryStore.saveDescriptor(
+                authoritativeDescriptor
+            )
+            if currentRepositoryID == repositoryID {
+                repositoryDescriptor = authoritativeDescriptor
+            }
+            repositoryCloudConflictRetryTasks
+                .removeValue(forKey: repositoryID)?
+                .cancel()
+            return hadActiveOutbox
+        }
+        let reference = repositories[index]
+        if reference.descriptor !=
+            authoritativeDescriptor {
+            // Persist the loss of write authority before touching outbound
+            // state. A crash after this fence will restart as a viewer and
+            // quarantine any still-active outbox instead of rebuilding it.
+            repositories[index].descriptor =
+                authoritativeDescriptor
+            try libraryStore.saveCatalog(repositories)
+        }
+        let hadLegacyPendingState =
+            reference.pendingCloudUploadAt != nil ||
+            reference.pendingCloudUploadGeneration != nil
+        let hadConflictState =
+            reference.cloudUploadConflictDetectedAt != nil ||
+            reference.cloudUploadConflictServerChangeTag != nil
+
+        if hadActiveOutbox {
+            _ = try outboxStore.suspendForReadOnlyAccess()
+        } else if hadLegacyPendingState {
+            let pendingDateBits = (
+                reference.pendingCloudUploadAt ??
+                reference.lastKnownSnapshotUpdatedAt ??
+                now()
+            ).timeIntervalSinceReferenceDate.bitPattern
+            _ = try repositoryStore
+                .preserveReadOnlyRecoveryCopy(
+                    identifier:
+                        "legacy-\(reference.pendingCloudUploadGeneration ?? 0)-\(pendingDateBits)"
+                )
+        }
+
+        repositories[index].descriptor =
+            authoritativeDescriptor
+        clearCloudUploadTracking(
+            atRepositoryIndex: index
+        )
+        try repositoryStore.saveDescriptor(
+            authoritativeDescriptor
+        )
+        if currentRepositoryID == repositoryID {
+            repositoryDescriptor = authoritativeDescriptor
+        }
+        repositoryCloudConflictRetryTasks
+            .removeValue(forKey: repositoryID)?
+            .cancel()
+        return hadActiveOutbox ||
+            hadLegacyPendingState ||
+            hadConflictState
+    }
+
+    private func clearCloudUploadTracking(
+        atRepositoryIndex index: Int
+    ) {
+        repositories[index].pendingCloudUploadAt = nil
+        repositories[index].pendingCloudUploadGeneration = nil
+        repositories[index].pendingCloudUploadBaseChangeTag = nil
+        repositories[index]
+            .cloudUploadConflictServerChangeTag = nil
+        repositories[index].cloudUploadConflictDetectedAt = nil
+    }
+
+    private func hasAuthorizedCloudUploadConflict() -> Bool {
+        for reference in repositories where
+            reference.cloudUploadConflictDetectedAt != nil {
+            guard let outbox = try? cloudUploadOutboxStore(
+                for: reference.id
+            ).load() else {
+                continue
+            }
+            if outbox.authorizedDescriptor(
+                for: reference
+            ) != nil {
+                return true
+            }
+        }
+        return false
+    }
+
     private func stageCloudUploadReceiptCommit(
         _ outbox: CloudUploadOutboxRecord,
         receipt: CloudUploadReceipt,
-        repositoryIndex index: Int
+        repositoryIndex index: Int,
+        authoritativeDescriptor: RepositoryDescriptor
     ) throws {
         guard repositories[index].id == outbox.repositoryID,
               repositories[index].pendingCloudUploadGeneration == nil ||
@@ -2688,9 +2845,21 @@ final class AppStore {
         let repositoryStore = libraryStore.repositoryStore(
             for: outbox.repositoryID
         )
+        let committedDescriptor: RepositoryDescriptor
+        switch outbox.mode {
+        case .prepareShare
+            where authoritativeDescriptor.role == .local:
+            committedDescriptor = receipt.descriptor
+        case .recreateAfterEncryptedDataReset:
+            committedDescriptor = receipt.descriptor
+        case .normal, .prepareShare:
+            committedDescriptor = authoritativeDescriptor
+        }
         try repositoryStore.saveCloudSnapshot(outbox.snapshot)
-        try repositoryStore.saveDescriptor(receipt.descriptor)
-        repositories[index].descriptor = receipt.descriptor
+        try repositoryStore.saveDescriptor(
+            committedDescriptor
+        )
+        repositories[index].descriptor = committedDescriptor
         repositories[index].lastKnownSnapshotUpdatedAt =
             outbox.snapshot.updatedAt
         repositories[index].lastKnownServerRecordChangeTag =
@@ -2705,7 +2874,7 @@ final class AppStore {
         repositories[index].cloudZoneUnavailableAt = nil
 
         if currentRepositoryID == outbox.repositoryID {
-            repositoryDescriptor = receipt.descriptor
+            repositoryDescriptor = committedDescriptor
         }
     }
 
@@ -2826,6 +2995,12 @@ final class AppStore {
     private func applyAcceptedShare(_ accepted: AcceptedSharedRepository) throws {
         let repositoryID = accepted.descriptor.storageIdentifier
         let repositoryStore = libraryStore.repositoryStore(for: repositoryID)
+        if accepted.descriptor.role == .viewer {
+            try suspendCloudUploadForReadOnlyAccess(
+                repositoryID: repositoryID,
+                authoritativeDescriptor: accepted.descriptor
+            )
+        }
         try repositoryStore.saveDescriptor(accepted.descriptor)
         try repositoryStore.saveCloudSnapshot(accepted.snapshot)
         invalidateImageViews()
@@ -2855,7 +3030,13 @@ final class AppStore {
 
         let repositoryStore = currentRepositoryStore
         let reference = repositoryReference(for: currentRepositoryID)
-        repositoryDescriptor = try repositoryStore.loadDescriptor() ?? reference?.descriptor ?? .local
+        if let reference {
+            repositoryDescriptor = reference.descriptor
+        } else {
+            repositoryDescriptor =
+                try repositoryStore.loadDescriptor() ??
+                .local
+        }
         let hasLocalSnapshot = try repositoryStore.loadSnapshot()
 
         if let snapshot = hasLocalSnapshot {
@@ -2922,6 +3103,9 @@ final class AppStore {
         beginRepositoryMutation(for: repositoryID)
 
         do {
+            guard descriptorAtStart.role.canEdit else {
+                throw CloudRepositoryError.repositoryLocked
+            }
             let existingOutbox = try outboxStore.load()
             let previousLocalSnapshot =
                 try repositoryStore.loadSnapshot()
@@ -2930,7 +3114,9 @@ final class AppStore {
                 existingOutbox?.mode == .prepareShare &&
                 existingOutbox?.receipt == nil
             let shouldCreateCloudOutbox =
-                descriptorAtStart.role != .local || isPendingLocalShare
+                (descriptorAtStart.isCloudBacked &&
+                 descriptorAtStart.role.canEdit) ||
+                isPendingLocalShare
 
             normalizeRepositoryState()
             let snapshot = RepositorySnapshot(
@@ -3037,7 +3223,6 @@ final class AppStore {
                     .cloudUploadConflictDetectedAt == nil {
                     scheduleCloudSync(
                         repositoryID: repositoryID,
-                        descriptor: descriptorAtStart,
                         displayName: repositoryName
                     )
                 } else {
@@ -3054,18 +3239,15 @@ final class AppStore {
 
     private func scheduleCloudSync(
         repositoryID: String,
-        descriptor: RepositoryDescriptor,
         displayName: String,
         mutationCount: Int = 1
     ) {
         if var pendingSync = pendingRepositoryCloudSyncs[repositoryID] {
-            pendingSync.descriptor = descriptor
             pendingSync.displayName = displayName
             pendingSync.mutationCount += mutationCount
             pendingRepositoryCloudSyncs[repositoryID] = pendingSync
         } else {
             pendingRepositoryCloudSyncs[repositoryID] = PendingRepositoryCloudSync(
-                descriptor: descriptor,
                 displayName: displayName,
                 mutationCount: mutationCount
             )
@@ -3138,7 +3320,6 @@ final class AppStore {
 
     private func scheduleDeferredCloudConflictRetry(
         repositoryID: String,
-        descriptor: RepositoryDescriptor,
         displayName: String
     ) {
         let retryAt = now().addingTimeInterval(
@@ -3166,17 +3347,28 @@ final class AppStore {
                 self.repositoryCloudConflictRetryTasks.removeValue(
                     forKey: repositoryID
                 )
+                guard let reference =
+                        self.repositoryReference(
+                            for: repositoryID
+                        ),
+                      let outbox = try?
+                        self.cloudUploadOutboxStore(
+                            for: repositoryID
+                        ).load(),
+                      outbox.authorizedDescriptor(
+                        for: reference
+                      ) != nil else {
+                    return
+                }
                 guard !self.arePendingCloudUploadsQuarantined,
                       self.activeSharedCloudThrottleUntil() == nil,
-                      self.repositoryReference(for: repositoryID)?
-                        .pendingCloudUploadGeneration != nil,
-                      self.repositoryReference(for: repositoryID)?
+                      reference.pendingCloudUploadGeneration != nil,
+                      reference
                         .cloudUploadConflictDetectedAt == nil else {
                     return
                 }
                 self.scheduleCloudSync(
                     repositoryID: repositoryID,
-                    descriptor: descriptor,
                     displayName: displayName,
                     mutationCount: 0
                 )
@@ -3203,13 +3395,73 @@ final class AppStore {
                   !Task.isCancelled else {
                 return
             }
+            guard let currentReference =
+                    repositoryReference(
+                        for: repositoryID
+                    ) else {
+                return
+            }
+            guard let authorizedDescriptor =
+                    outbox.authorizedDescriptor(
+                        for: currentReference
+                    ) else {
+                if currentReference.descriptor.role ==
+                    .viewer {
+                    _ = try suspendCloudUploadForReadOnlyAccess(
+                        repositoryID: repositoryID,
+                        authoritativeDescriptor:
+                            currentReference.descriptor
+                    )
+                    try persistRepositoryCatalog()
+                    repositoriesPendingRefreshAfterMutation
+                        .insert(repositoryID)
+                }
+                return
+            }
+            let validatedDescriptor =
+                try await cloudService
+                    .validatedDescriptorForUpload(
+                        using: authorizedDescriptor
+                    )
+            guard !Task.isCancelled else {
+                return
+            }
+            if validatedDescriptor.role == .viewer {
+                _ = try suspendCloudUploadForReadOnlyAccess(
+                    repositoryID: repositoryID,
+                    authoritativeDescriptor:
+                        validatedDescriptor
+                )
+                try persistRepositoryCatalog()
+                repositoriesPendingRefreshAfterMutation
+                    .insert(repositoryID)
+                if currentRepositoryID == repositoryID {
+                    alertMessage = L10n.string(
+                        "The shared repository is now read-only. Unuploaded changes were kept on this device for recovery and will not be uploaded."
+                    )
+                }
+                return
+            }
+            guard validatedDescriptor.role ==
+                    authorizedDescriptor.role,
+                  validatedDescriptor.zoneID ==
+                    authorizedDescriptor.zoneID,
+                  let latestReference =
+                    repositoryReference(
+                        for: repositoryID
+                    ),
+                  outbox.authorizedDescriptor(
+                    for: latestReference
+                  ) != nil else {
+                return
+            }
 
             let saveResult: SavedRepositorySnapshot
             switch outbox.mode {
             case .normal, .prepareShare:
                 saveResult = try await cloudService.saveSnapshot(
                     outbox.snapshot,
-                    using: outbox.descriptor,
+                    using: validatedDescriptor,
                     expectedRecordChangeTag: outbox.baseRecordChangeTag,
                     acceptedPredecessorOperationIDs: Set(
                         outbox.predecessorOperationIDs
@@ -3218,7 +3470,7 @@ final class AppStore {
             case .recreateAfterEncryptedDataReset:
                 saveResult = try await cloudService.recreateSnapshotAfterEncryptedDataReset(
                     outbox.snapshot,
-                    using: outbox.descriptor,
+                    using: validatedDescriptor,
                     acceptedPredecessorOperationIDs: Set(
                         outbox.predecessorOperationIDs
                     )
@@ -3252,6 +3504,19 @@ final class AppStore {
                     latestOutbox.encryptedResetAcknowledgement =
                         outbox.encryptedResetAcknowledgement
                 }
+                let uploadReceipt = CloudUploadReceipt(
+                    descriptor: savedDescriptor,
+                    serverModifiedAt:
+                        saveResult.serverModifiedAt,
+                    recordChangeTag:
+                        saveResult.recordChangeTag,
+                    uploadedAt: now()
+                )
+                if outbox.mode == .prepareShare {
+                    latestOutbox.recordSharePreparationReceipt(
+                        uploadReceipt
+                    )
+                }
                 let carriesEncryptedResetAcknowledgement =
                     outbox.mode ==
                         .recreateAfterEncryptedDataReset ||
@@ -3261,14 +3526,7 @@ final class AppStore {
                 if carriesEncryptedResetAcknowledgement {
                     latestOutbox.recordEncryptedResetAcknowledgement(
                         operationID: outbox.operationID,
-                        receipt: CloudUploadReceipt(
-                            descriptor: savedDescriptor,
-                            serverModifiedAt:
-                                saveResult.serverModifiedAt,
-                            recordChangeTag:
-                                saveResult.recordChangeTag,
-                            uploadedAt: now()
-                        )
+                        receipt: uploadReceipt
                     )
                 }
                 try latestOutbox.advanceBaseRecordChangeTag(
@@ -3336,7 +3594,6 @@ final class AppStore {
                 )
                 scheduleDeferredCloudConflictRetry(
                     repositoryID: repositoryID,
-                    descriptor: pendingSync.descriptor,
                     displayName: pendingSync.displayName
                 )
                 return
@@ -3357,7 +3614,6 @@ final class AppStore {
                 case .retry:
                     scheduleCloudSync(
                         repositoryID: repositoryID,
-                        descriptor: pendingSync.descriptor,
                         displayName: pendingSync.displayName,
                         mutationCount: 0
                     )
@@ -3372,12 +3628,16 @@ final class AppStore {
                             serverRecordChangeTag
                     )
                     try? persistRepositoryCatalog()
-                    alertMessage = Self.userFacingMessage(
-                        for: CloudRepositoryError.repositoryConflict(
-                            serverRecordChangeTag:
-                                serverRecordChangeTag
+                    if repositoryReference(
+                        for: repositoryID
+                    )?.cloudUploadConflictDetectedAt != nil {
+                        alertMessage = Self.userFacingMessage(
+                            for: CloudRepositoryError.repositoryConflict(
+                                serverRecordChangeTag:
+                                    serverRecordChangeTag
+                            )
                         )
-                    )
+                    }
                 }
             } catch {
                 SyncDiagnostics.logger.error(
@@ -3386,6 +3646,40 @@ final class AppStore {
                 _ = recordSharedCloudThrottleIfNeeded(for: error)
             }
         } catch {
+            if let reference =
+                    repositoryReference(for: repositoryID),
+               reference.descriptor.role == .editor,
+               Self.containsCloudKitError(
+                    .permissionFailure,
+                    in: error
+               ) {
+                var readOnlyDescriptor =
+                    reference.descriptor
+                readOnlyDescriptor.role = .viewer
+                do {
+                    _ = try suspendCloudUploadForReadOnlyAccess(
+                        repositoryID: repositoryID,
+                        authoritativeDescriptor:
+                            readOnlyDescriptor
+                    )
+                    try persistRepositoryCatalog()
+                    repositoriesPendingRefreshAfterMutation
+                        .insert(repositoryID)
+                    if currentRepositoryID == repositoryID {
+                        alertMessage = L10n.string(
+                            "The shared repository is now read-only. Unuploaded changes were kept on this device for recovery and will not be uploaded."
+                        )
+                    }
+                    SyncDiagnostics.logger.notice(
+                        "Suspended a shared repository upload after CloudKit revoked write permission."
+                    )
+                    return
+                } catch {
+                    SyncDiagnostics.logger.error(
+                        "Could not preserve a read-only recovery copy after CloudKit revoked write permission: \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
             SyncDiagnostics.logger.error(
                 "CloudKit repository upload failed and remains in the durable outbox: \(String(describing: error), privacy: .public)"
             )
@@ -3405,6 +3699,14 @@ final class AppStore {
               outbox.receipt == nil else {
             return .completed
         }
+        guard let reference =
+                repositoryReference(for: repositoryID),
+              let authorizedDescriptor =
+                outbox.authorizedDescriptor(
+                    for: reference
+                ) else {
+            throw CloudRepositoryError.repositoryLocked
+        }
 
         // Share creation and encrypted-data-reset recovery have different
         // identity/acknowledgement semantics. Never fold them into an ordinary
@@ -3415,7 +3717,7 @@ final class AppStore {
 
         let loadedRemote =
             try await cloudService.loadSnapshotWithMetadata(
-                using: outbox.descriptor,
+                using: authorizedDescriptor,
                 availableImageContentHashes: [:]
             )
         try Task.checkCancellation()
@@ -3428,7 +3730,12 @@ final class AppStore {
         // in flight. Never let recovery for G overwrite durable generation G+1.
         guard let latestOutbox = try outboxStore.load(),
               latestOutbox.generation == outbox.generation,
-              latestOutbox.operationID == outbox.operationID else {
+              latestOutbox.operationID == outbox.operationID,
+              let latestReference =
+                repositoryReference(for: repositoryID),
+              latestOutbox.authorizedDescriptor(
+                for: latestReference
+              ) == authorizedDescriptor else {
             return .retry
         }
 
@@ -3480,7 +3787,7 @@ final class AppStore {
         )
         let successorOutbox = try CloudUploadOutboxRecord(
             repositoryID: repositoryID,
-            descriptor: outbox.descriptor,
+            descriptor: authorizedDescriptor,
             displayName: displayName,
             snapshot: resolution.snapshot,
             generation: outbox.generation &+ 1,
@@ -3508,12 +3815,12 @@ final class AppStore {
             successorOutbox.snapshot
         )
         try repositoryStore.saveDescriptor(
-            successorOutbox.descriptor
+            authorizedDescriptor
         )
 
         upsertRepositoryReference(
             repositoryID: repositoryID,
-            descriptor: successorOutbox.descriptor,
+            descriptor: authorizedDescriptor,
             displayName: displayName,
             snapshotUpdatedAt:
                 successorOutbox.snapshot.updatedAt,
@@ -3534,7 +3841,7 @@ final class AppStore {
         try persistRepositoryCatalog()
 
         if repositoryID == currentRepositoryID {
-            repositoryDescriptor = successorOutbox.descriptor
+            repositoryDescriptor = authorizedDescriptor
             applySnapshot(
                 successorOutbox.snapshot.removingEmbeddedImages()
             )
@@ -3558,12 +3865,16 @@ final class AppStore {
         repositoryIndex: Int?,
         outboxStore: CloudUploadOutboxStore
     ) throws {
-        guard let repositoryIndex else {
+        guard let repositoryIndex,
+              let authoritativeDescriptor =
+                outbox.authorizedDescriptor(
+                    for: repositories[repositoryIndex]
+                ) else {
             throw CloudRepositoryError.repositoryNotFound
         }
         var uploadedOutbox = outbox
         uploadedOutbox.markUploaded(
-            descriptor: outbox.descriptor,
+            descriptor: authoritativeDescriptor,
             serverModifiedAt: metadata.serverModifiedAt,
             recordChangeTag: metadata.recordChangeTag,
             uploadedAt: now()
@@ -3575,7 +3886,9 @@ final class AppStore {
         try stageCloudUploadReceiptCommit(
             uploadedOutbox,
             receipt: receipt,
-            repositoryIndex: repositoryIndex
+            repositoryIndex: repositoryIndex,
+            authoritativeDescriptor:
+                authoritativeDescriptor
         )
         try persistRepositoryCatalog()
         if uploadedOutbox.mode !=
@@ -3589,13 +3902,20 @@ final class AppStore {
         guard !arePendingCloudUploadsQuarantined else {
             return
         }
-        let pendingReferences = repositories.filter {
-            ($0.pendingCloudUploadAt != nil || $0.pendingCloudUploadGeneration != nil) &&
-                ($0.descriptor.isCloudBacked ||
-                 (try? cloudUploadOutboxStore(for: $0.id).load())?.mode == .prepareShare) &&
-                $0.cloudUploadConflictDetectedAt == nil &&
-                $0.cloudZoneUnavailableAt == nil &&
-                $0.cloudPurgeRequestedAt == nil
+        let pendingReferences = repositories.filter { reference in
+            guard (reference.pendingCloudUploadAt != nil ||
+                   reference.pendingCloudUploadGeneration != nil),
+                  reference.cloudUploadConflictDetectedAt == nil,
+                  reference.cloudZoneUnavailableAt == nil,
+                  reference.cloudPurgeRequestedAt == nil,
+                  let outbox = try? cloudUploadOutboxStore(
+                    for: reference.id
+                  ).load() else {
+                return false
+            }
+            return outbox.authorizedDescriptor(
+                for: reference
+            ) != nil
         }
         guard !pendingReferences.isEmpty else {
             return
@@ -3604,7 +3924,6 @@ final class AppStore {
         for reference in pendingReferences {
             scheduleCloudSync(
                 repositoryID: reference.id,
-                descriptor: reference.descriptor,
                 displayName: reference.displayName,
                 mutationCount: 0
             )
@@ -3673,6 +3992,14 @@ final class AppStore {
                 expectedGeneration else {
             return
         }
+        guard let outbox = try? cloudUploadOutboxStore(
+            for: repositoryID
+        ).load(),
+              outbox.authorizedDescriptor(
+                for: repositories[index]
+              ) != nil else {
+            return
+        }
 
         repositories[index].cloudUploadConflictServerChangeTag =
             serverRecordChangeTag
@@ -3727,6 +4054,8 @@ final class AppStore {
         let normalizedName = displayName.trimmed.nilIfEmpty ?? descriptor.defaultDisplayName
         let source: RepositorySource = repositoryID == RepositoryReference.localRepositoryID ? .local : .shared
         let existing = repositories.first(where: { $0.id == repositoryID })
+        let retainsCloudUploadState =
+            descriptor.role.canEdit
         let updatedReference = RepositoryReference(
             id: repositoryID,
             displayName: source == .local ? "My Repository" : normalizedName,
@@ -3737,11 +4066,28 @@ final class AppStore {
             lastOpenedAt: markAsOpened ? now() : existing?.lastOpenedAt,
             lastKnownServerRecordChangeTag: existing?.lastKnownServerRecordChangeTag,
             lastKnownServerModifiedAt: existing?.lastKnownServerModifiedAt,
-            pendingCloudUploadAt: existing?.pendingCloudUploadAt,
-            pendingCloudUploadGeneration: existing?.pendingCloudUploadGeneration,
-            pendingCloudUploadBaseChangeTag: existing?.pendingCloudUploadBaseChangeTag,
-            cloudUploadConflictServerChangeTag: existing?.cloudUploadConflictServerChangeTag,
-            cloudUploadConflictDetectedAt: existing?.cloudUploadConflictDetectedAt,
+            pendingCloudUploadAt:
+                retainsCloudUploadState
+                    ? existing?.pendingCloudUploadAt
+                    : nil,
+            pendingCloudUploadGeneration:
+                retainsCloudUploadState
+                    ? existing?.pendingCloudUploadGeneration
+                    : nil,
+            pendingCloudUploadBaseChangeTag:
+                retainsCloudUploadState
+                    ? existing?
+                        .pendingCloudUploadBaseChangeTag
+                    : nil,
+            cloudUploadConflictServerChangeTag:
+                retainsCloudUploadState
+                    ? existing?
+                        .cloudUploadConflictServerChangeTag
+                    : nil,
+            cloudUploadConflictDetectedAt:
+                retainsCloudUploadState
+                    ? existing?.cloudUploadConflictDetectedAt
+                    : nil,
             cloudZoneUnavailableAt: existing?.cloudZoneUnavailableAt,
             cloudPurgeRequestedAt: existing?.cloudPurgeRequestedAt,
             subscriptionConfigurationVersion: existing?.subscriptionConfigurationVersion,
@@ -3970,13 +4316,19 @@ final class AppStore {
                   acknowledgement.receipt == receipt,
                   let index = repositories.firstIndex(where: {
                       $0.id == reference.id
-                  }) else {
+                  }),
+                  let authoritativeDescriptor =
+                    outbox.authorizedDescriptor(
+                        for: repositories[index]
+                    ) else {
                 throw CloudRepositoryError.invalidRepositoryData
             }
             try stageCloudUploadReceiptCommit(
                 outbox,
                 receipt: receipt,
-                repositoryIndex: index
+                repositoryIndex: index,
+                authoritativeDescriptor:
+                    authoritativeDescriptor
             )
             didStageReceiptCommit = true
         }
@@ -4372,7 +4724,6 @@ final class AppStore {
 
         scheduleCloudSync(
             repositoryID: reference.id,
-            descriptor: recoveryOutbox.descriptor,
             displayName: recoveryOutbox.displayName,
             mutationCount: 0
         )
@@ -5100,6 +5451,36 @@ final class AppStore {
 
         collect(from: error)
         return retryAfterValues.max()
+    }
+
+    private static func containsCloudKitError(
+        _ code: CKError.Code,
+        in error: Error
+    ) -> Bool {
+        if let cloudError = error as? CKError,
+           cloudError.code == code {
+            return true
+        }
+
+        let nsError = error as NSError
+        if let underlyingError =
+            nsError.userInfo[NSUnderlyingErrorKey] as? Error,
+           containsCloudKitError(
+            code,
+            in: underlyingError
+           ) {
+            return true
+        }
+        if nsError.domain == CKErrorDomain,
+           let partialErrors =
+            nsError.userInfo[
+                CKPartialErrorsByItemIDKey
+            ] as? [AnyHashable: Error] {
+            return partialErrors.values.contains {
+                containsCloudKitError(code, in: $0)
+            }
+        }
+        return false
     }
 
     private static func cloudKitProductionSchemaMessage(for error: Error) -> String? {

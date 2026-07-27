@@ -88,6 +88,9 @@ protocol CloudRepositoryServicing {
         expectedRecordChangeTag: String?,
         acceptedPredecessorOperationIDs: Set<UUID>
     ) async throws -> SavedRepositorySnapshot
+    func validatedDescriptorForUpload(
+        using descriptor: RepositoryDescriptor
+    ) async throws -> RepositoryDescriptor
     func recreateSnapshotAfterEncryptedDataReset(
         _ snapshot: RepositorySnapshot,
         using descriptor: RepositoryDescriptor,
@@ -157,6 +160,12 @@ extension CloudRepositoryServicing {
     func cloudAccountAvailability() async throws
         -> CloudAccountAvailability {
         .available(userRecordName: "default-cloud-account")
+    }
+
+    func validatedDescriptorForUpload(
+        using descriptor: RepositoryDescriptor
+    ) async throws -> RepositoryDescriptor {
+        descriptor
     }
 }
 
@@ -500,6 +509,39 @@ final class CloudRepositoryService: CloudRepositoryServicing {
             acceptedPredecessorOperationIDs: acceptedPredecessorOperationIDs,
             requiresKnownBaseline: descriptor.role != .local
         )
+    }
+
+    func validatedDescriptorForUpload(
+        using descriptor: RepositoryDescriptor
+    ) async throws -> RepositoryDescriptor {
+        guard descriptor.role.canEdit else {
+            return descriptor
+        }
+        guard descriptor.role == .editor else {
+            return descriptor
+        }
+        guard let zoneID = descriptor.zoneID,
+              let shareRecordName =
+                descriptor.shareRecordName else {
+            throw CloudRepositoryError.repositoryDescriptorMissing
+        }
+
+        let shareRecordID = CKRecord.ID(
+            recordName: shareRecordName,
+            zoneID: zoneID
+        )
+        guard let share = try await fetchRecordIfPresent(
+            recordID: shareRecordID,
+            in: sharedDatabase
+        ) as? CKShare else {
+            throw CloudRepositoryError.repositoryNotFound
+        }
+        var validatedDescriptor = descriptor
+        validatedDescriptor.role =
+            share.currentUserParticipant?.permission == .readWrite
+                ? .editor
+                : .viewer
+        return validatedDescriptor
     }
 
     func recreateSnapshotAfterEncryptedDataReset(

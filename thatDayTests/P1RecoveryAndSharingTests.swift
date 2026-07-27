@@ -1214,6 +1214,136 @@ final class P1RecoveryAndSharingTests: AppStoreTestCase {
     }
 
     @MainActor
+    func testPreparedShareSuccessorRecoversIfAppStopsBeforeCatalogPromotion() async throws {
+        let rootURL = makeTempDirectory()
+        let snapshotDate = fixtureDate(
+            "2026-07-25T12:00:00Z"
+        )
+        let successorSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Successor after share creation",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let libraryStore = try makeLibrary(
+            rootURL: rootURL,
+            localSnapshot: successorSnapshot,
+            preferences: AppPreferences(
+                cloudAccountUserRecordName:
+                    "mock-cloud-account"
+            )
+        )
+        let ownerDescriptor = RepositoryDescriptor(
+            zoneName: "prepared-share-successor-zone",
+            zoneOwnerName: CKCurrentUserDefaultName,
+            shareRecordName: "prepared-share-successor-share",
+            role: .owner
+        )
+        let preparationReceipt = CloudUploadReceipt(
+            descriptor: ownerDescriptor,
+            serverModifiedAt: snapshotDate,
+            recordChangeTag: "prepared-share-tag",
+            uploadedAt: snapshotDate
+        )
+        var successorOutbox = try CloudUploadOutboxRecord(
+            repositoryID:
+                RepositoryReference.localRepositoryID,
+            descriptor: .local,
+            displayName: "My Repository",
+            snapshot: successorSnapshot,
+            generation: 2,
+            baseRecordChangeTag: nil,
+            baseSnapshot: RepositorySnapshot(
+                entries: [],
+                updatedAt:
+                    snapshotDate.addingTimeInterval(-60)
+            ),
+            predecessorOperationIDs: [UUID()],
+            mode: .prepareShare,
+            createdAt: snapshotDate
+        )
+        try successorOutbox.advanceBaseRecordChangeTag(
+            preparationReceipt.recordChangeTag,
+            baseSnapshot: successorSnapshot
+        )
+        successorOutbox.mode = .normal
+        successorOutbox.descriptor = ownerDescriptor
+        successorOutbox.recordSharePreparationReceipt(
+            preparationReceipt
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(
+                    for:
+                        RepositoryReference.localRepositoryID
+                )
+                .rootURL
+        )
+        try outboxStore.save(successorOutbox)
+        var catalog = try libraryStore.loadCatalog()
+        let localIndex = try XCTUnwrap(
+            catalog.firstIndex {
+                $0.id ==
+                    RepositoryReference.localRepositoryID
+            }
+        )
+        catalog[localIndex].pendingCloudUploadAt =
+            snapshotDate
+        catalog[localIndex].pendingCloudUploadGeneration =
+            successorOutbox.generation
+        try libraryStore.saveCatalog(catalog)
+
+        let cloudService = MockCloudRepositoryService()
+        cloudService.loadedSnapshot = successorSnapshot
+        cloudService.metadataRecordChangeTag =
+            "successor-upload-tag"
+        cloudService.savedRecordChangeTag =
+            "successor-upload-tag"
+        let restartedStore = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: {
+                snapshotDate.addingTimeInterval(60)
+            }
+        )
+
+        await restartedStore.loadIfNeeded()
+
+        XCTAssertEqual(
+            cloudService.savedDescriptors,
+            [ownerDescriptor]
+        )
+        XCTAssertEqual(
+            cloudService.savedExpectedRecordChangeTags,
+            ["prepared-share-tag"]
+        )
+        XCTAssertNil(try outboxStore.load())
+        let recoveredReference = try XCTUnwrap(
+            libraryStore.loadCatalog().first {
+                $0.id ==
+                    RepositoryReference.localRepositoryID
+            }
+        )
+        XCTAssertEqual(
+            recoveredReference.descriptor,
+            ownerDescriptor
+        )
+        XCTAssertNil(
+            recoveredReference.pendingCloudUploadGeneration
+        )
+        XCTAssertEqual(
+            try libraryStore.repositoryStore(
+                for:
+                    RepositoryReference.localRepositoryID
+            ).loadDescriptor(),
+            ownerDescriptor
+        )
+    }
+
+    @MainActor
     func testEncryptedResetWithoutLocalSnapshotStaysPendingAndDoesNotPublishEmptyRepository() async throws {
         let rootURL = makeTempDirectory()
         let snapshotDate = fixtureDate("2026-07-25T13:00:00Z")

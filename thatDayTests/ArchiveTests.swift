@@ -458,6 +458,119 @@ final class ArchiveTests: AppStoreTestCase {
         XCTAssertNotNil(try destinationStore.exportableFileURLs().first(where: { $0.lastPathComponent.hasSuffix(".jpg") }))
     }
 
+    func testRepositoryArchiveRoundTripPreservesNestedReadOnlyRecoveryCopy() async throws {
+        let rootURL = makeTempDirectory()
+        let sourceStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent(
+                "recovery-source",
+                isDirectory: true
+            )
+        )
+        let destinationStore = LocalRepositoryStore(
+            rootURL: rootURL.appendingPathComponent(
+                "recovery-destination",
+                isDirectory: true
+            )
+        )
+        let snapshotDate = fixtureDate(
+            "2026-07-25T17:30:00Z"
+        )
+        let viewerDescriptor = RepositoryDescriptor(
+            zoneName: "recovery-archive-zone",
+            zoneOwnerName: "_recovery_archive_owner_",
+            shareRecordName: "recovery-archive-share",
+            role: .viewer
+        )
+        let imageData = try XCTUnwrap(
+            makePreviewImageData()
+        )
+        let entryID = UUID()
+        let imageReference = try sourceStore.storeImage(
+            data: imageData,
+            suggestedID: entryID
+        )
+        let storedImageData = try Data(
+            contentsOf: XCTUnwrap(
+                sourceStore.imageURL(
+                    for: imageReference
+                )
+            )
+        )
+        let snapshot = RepositorySnapshot(
+            entries: [
+                EntryRecord(
+                    id: entryID,
+                    kind: .blog,
+                    title: "Recoverable local copy",
+                    body: "Must survive ZIP export and import.",
+                    happenedAt: snapshotDate,
+                    createdAt: snapshotDate,
+                    updatedAt: snapshotDate,
+                    imageReference: imageReference
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        try sourceStore.saveDescriptor(viewerDescriptor)
+        try sourceStore.saveSnapshot(snapshot)
+        let sourceRecoveryURL =
+            try sourceStore.preserveReadOnlyRecoveryCopy(
+                identifier: "archive-round-trip"
+            )
+        XCTAssertEqual(
+            try LocalRepositoryStore(
+                rootURL: sourceRecoveryURL
+            ).loadDescriptor(),
+            viewerDescriptor
+        )
+
+        let service = RepositoryArchiveService()
+        let zipURL = try await service.exportArchive(
+            from: sourceStore,
+            repositoryID: viewerDescriptor.storageIdentifier,
+            repositoryName: "Recovery Archive"
+        ) { _, _ in }
+        _ = try await service.importArchive(
+            from: zipURL,
+            into: destinationStore,
+            preserving: .local
+        ) { _, _ in }
+
+        let importedRecoveryStore =
+            LocalRepositoryStore(
+                rootURL: destinationStore.rootURL
+                    .appendingPathComponent(
+                        "read-only-upload-recovery",
+                        isDirectory: true
+                    )
+                    .appendingPathComponent(
+                        "cached-repository-archive-round-trip",
+                        isDirectory: true
+                    )
+            )
+        XCTAssertEqual(
+            try destinationStore.loadDescriptor(),
+            .local
+        )
+        XCTAssertEqual(
+            try importedRecoveryStore.loadDescriptor(),
+            viewerDescriptor
+        )
+        XCTAssertEqual(
+            try importedRecoveryStore.loadSnapshot(),
+            snapshot
+        )
+        let recoveredImageURL = try XCTUnwrap(
+            importedRecoveryStore.imageURL(
+                for: imageReference
+            )
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: recoveredImageURL),
+            storedImageData
+        )
+    }
+
     func testRepositoryArchiveRoundTripRestoresImagesForTmpSymlinkPaths() async throws {
         let rootURL = try makeSymlinkedTempDirectory()
         XCTAssertNotEqual(rootURL.path, rootURL.resolvingSymlinksInPath().path)

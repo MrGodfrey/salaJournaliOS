@@ -1051,3 +1051,41 @@
   - UI 测试最终完整重跑 `32/32` 通过，零失败、零跳过；xcresult：`/private/tmp/thatDay-sync-fix-final-ui3-20260727/Logs/Test/Test-thatDay-2026.07.27_18-26-31-+0100.xcresult`
   - 首轮完整 UI 中性能采集进程曾无崩溃报告地退出一次；同一性能用例隔离重跑通过，随后全新完整 UI 回归也全部通过
   - `git diff --check`、Swift 静态解析、`plutil -lint`、build-for-testing 和 `1.2.11 (4)` 无签名 generic iOS Release 构建均通过
+
+## 2026-07-27 21:06
+
+- 修复只读共享仓库错误进入上传状态并显示 “This repository changed in iCloud before the pending local update could upload” 的问题：
+  - 根因是 viewer 权限只约束了编辑 UI 和 CloudKit 写入末端，outbox 创建、旧状态迁移、启动恢复、调度、延迟重试与冲突恢复仍只判断“是否为云仓库”
+  - viewer 的 legacy pending / conflict 标记会在启动时重新合成 active outbox；旧 editor outbox 还可能用过期 descriptor 覆盖 catalog 中的 viewer，随后既不能上传，也因 pending 状态不能下行刷新
+  - 启动提示此前只检查任意 catalog conflict 标记，没有确认该仓库仍具备写权限和有效 outbox，因此会把只读仓库的遗留标记当作真实上传冲突
+- 建立同步层统一的 outbound 权限不变量：
+  - 普通上传只允许当前 catalog 中同一 zone、同一角色的 owner / editor；首次分享只允许本地仓库；encrypted-data-reset 重建只允许 owner
+  - 待执行队列不再携带可过期的 descriptor；outbox 只能提供 durable operation 上下文，不能恢复或提升当前权限
+  - 创建、导入、启动迁移、恢复调度、实际上传、延迟重试、冲突合并与冲突提示全部复用同一授权判断
+  - 当前 catalog 优先于仓库目录里的旧 `descriptor.json`；viewer 的 pending / conflict 字段在 reference 更新时清空
+- 将 viewer 修复为严格的下行同步：
+  - viewer 不再创建、恢复、调度或执行上传，也不进入上传冲突合并
+  - 磁盘上已有 outbox 时先原子移动到 `read-only-upload-recovery/`；只有 legacy catalog 标记、没有 outbox 时先复制 `repository.json`、`descriptor.json` 和图片，再解除 pending 阻塞
+  - authorization fence 会先把 viewer 权限持久化到 catalog，再隔离 outbound 状态；即使在多文件提交中途崩溃，重启也只能进入 viewer quarantine，不能重新合成上传
+  - 接受只读分享前先停稳同仓库 uploader；即使 catalog 尚无该仓库但磁盘存在 orphan editor outbox，也会立即隔离
+  - 只读恢复目录不参与自动上传，但会完整进入手动 ZIP 导出；ZIP 导入只排除根 `descriptor.json`，不会再误删恢复目录里的嵌套 descriptor
+- 增强运行中权限降级保护：
+  - editor 每次真正上传前读回当前 `CKShare.currentUserParticipant.permission`
+  - preflight 已变成只读时，在 CloudKit 写入前保存恢复副本、持久化 viewer 并恢复 owner 快照下行
+  - preflight 后到原子写入之间若权限被撤销，`CKError.permissionFailure` 也走同一 fail-closed 降级路径，不会无限重试旧 outbox
+  - 新增简体中文提示，明确未上传内容已留在本机恢复副本且不会上传
+- 保持既有崩溃恢复语义：
+  - 首次分享 G 成功、G+1 已转为普通 owner outbox、catalog 尚未从 local 提升时，新增 durable `sharePreparationReceipt` 证明合法的 local → owner 过渡
+  - 该证明只在 mode、owner descriptor、zone 和 base change tag 全部一致时生效，避免严格权限校验把合法 successor 当作越权 outbox
+  - encrypted-data-reset receipt 提交路径继续使用服务端返回的新 descriptor，原有 reset / acknowledgement 恢复测试保持通过
+- 架构审查结论：
+  - 本次用集中式 eligibility、catalog 权限权威和 recovery quarantine 消除了只读上传的多处分支判断，写作保存仍然本地优先，不等待新增的 editor 权限复核网络请求
+  - 当前 `AppStore.swift` 仍同时承载 UI、文件 I/O、账户、上传、下载、订阅和重试，权限与 pending 状态也跨 catalog / descriptor / outbox 保存；后续应增量抽出 `RepositorySyncEngine` actor，让 outbox 成为 active pending 的唯一持久事实来源，避免继续增加双向重建复杂度
+- 测试与验证：
+  - 新增 viewer legacy pending、stale editor outbox、无 catalog orphan outbox、preflight 降权、写入竞态 permission failure、prepareShare G/G+1 崩溃窗口和恢复 ZIP round-trip 回归
+  - 测试 mock 现在与生产服务一致，会拒绝 viewer `saveSnapshot`
+  - 独立代码审查未发现剩余 P0 / P1
+  - 定向高风险回归 `8/8` 通过
+  - 完整单元测试 `188/188` 通过，零失败、零跳过；xcresult：`/private/tmp/thatDay-readonly-fix-unit-final-20260727/Logs/Test/Test-thatDay-2026.07.27_20-57-10-+0100.xcresult`
+  - 完整 UI 测试 `32/32` 次执行通过（常规 `24/24`、Launch `8/8`），零失败、零跳过；xcresult：`/private/tmp/thatDay-readonly-fix-ui-final-20260727/Logs/Test/Test-thatDay-2026.07.27_20-58-07-+0100.xcresult`
+  - `plutil -lint`、Swift 静态解析、`git diff --check`、generic iOS `build-for-testing` 和 `1.2.11 (4)` 无签名 generic iOS Release 构建均通过

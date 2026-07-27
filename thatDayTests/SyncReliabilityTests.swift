@@ -1575,6 +1575,506 @@ final class SyncReliabilityTests: AppStoreTestCase {
     }
 
     @MainActor
+    func testReadOnlyLegacyPendingStateDoesNotRebuildOrUploadAndStillRefreshes() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "read-only-legacy-pending-zone",
+            zoneOwnerName: "_read_only_legacy_owner_",
+            shareRecordName: "read-only-legacy-share",
+            role: .viewer
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let cachedDate = fixtureDate("2026-07-23T10:00:00Z")
+        let remoteDate = fixtureDate("2026-07-23T10:05:00Z")
+        let cachedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Cached read-only entry",
+                    happenedAt: cachedDate
+                )
+            ],
+            updatedAt: cachedDate
+        )
+        let remoteSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Girlfriend remote update",
+                    happenedAt: remoteDate
+                )
+            ],
+            updatedAt: remoteDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Read-Only Legacy Pending",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: cachedDate,
+            lastKnownServerRecordChangeTag: "cached-tag",
+            pendingCloudUploadAt: cachedDate,
+            pendingCloudUploadGeneration: 4,
+            pendingCloudUploadBaseChangeTag: "cached-tag",
+            cloudUploadConflictServerChangeTag:
+                "remote-tag",
+            cloudUploadConflictDetectedAt: cachedDate
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: cachedSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = remoteSnapshot
+        cloudService.metadataRecordChangeTag = "remote-tag"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { remoteDate }
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.repositoryDescriptor.role, .viewer)
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Girlfriend remote update"]
+        )
+        XCTAssertTrue(cloudService.savedSnapshots.isEmpty)
+        XCTAssertTrue(
+            cloudService.uploadAuthorizationDescriptors.isEmpty
+        )
+        XCTAssertNotEqual(
+            store.alertMessage,
+            L10n.string(
+                "This repository changed in iCloud before the pending local update could upload. Both copies were kept; automatic upload is paused to prevent data loss."
+            )
+        )
+        let repairedReference = try XCTUnwrap(
+            libraryStore.loadCatalog().first {
+                $0.id == repositoryID
+            }
+        )
+        XCTAssertEqual(repairedReference.descriptor.role, .viewer)
+        XCTAssertNil(repairedReference.pendingCloudUploadAt)
+        XCTAssertNil(
+            repairedReference.pendingCloudUploadGeneration
+        )
+        XCTAssertNil(
+            repairedReference.cloudUploadConflictDetectedAt
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        XCTAssertNil(try outboxStore.load())
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(
+                at: outboxStore.recoveryDirectoryURL,
+                includingPropertiesForKeys: nil
+            ).isEmpty
+        )
+    }
+
+    @MainActor
+    func testReadOnlyCatalogSuspendsStaleEditorOutboxWithoutRestoringWriteAccess() async throws {
+        let rootURL = makeTempDirectory()
+        let editorDescriptor = RepositoryDescriptor(
+            zoneName: "read-only-stale-editor-zone",
+            zoneOwnerName: "_read_only_stale_editor_owner_",
+            shareRecordName: "read-only-stale-editor-share",
+            role: .editor
+        )
+        var viewerDescriptor = editorDescriptor
+        viewerDescriptor.role = .viewer
+        let repositoryID = viewerDescriptor.storageIdentifier
+        let pendingDate = fixtureDate("2026-07-23T10:10:00Z")
+        let remoteDate = fixtureDate("2026-07-23T10:15:00Z")
+        let pendingSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Former editor local draft",
+                    happenedAt: pendingDate
+                )
+            ],
+            updatedAt: pendingDate
+        )
+        let remoteSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Current owner version",
+                    happenedAt: remoteDate
+                )
+            ],
+            updatedAt: remoteDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Read-Only Stale Editor",
+            descriptor: viewerDescriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: pendingDate,
+            lastKnownServerRecordChangeTag: "old-tag",
+            pendingCloudUploadAt: pendingDate,
+            pendingCloudUploadGeneration: 2,
+            pendingCloudUploadBaseChangeTag: "old-tag",
+            cloudUploadConflictServerChangeTag: "remote-tag",
+            cloudUploadConflictDetectedAt: pendingDate
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: pendingSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        try outboxStore.save(
+            CloudUploadOutboxRecord(
+                repositoryID: repositoryID,
+                descriptor: editorDescriptor,
+                displayName: reference.displayName,
+                snapshot: pendingSnapshot,
+                generation: 2,
+                baseRecordChangeTag: "old-tag",
+                baseSnapshot: RepositorySnapshot(
+                    entries: [],
+                    updatedAt:
+                        pendingDate.addingTimeInterval(-1)
+                ),
+                createdAt: pendingDate
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = remoteSnapshot
+        cloudService.metadataRecordChangeTag = "remote-tag"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { remoteDate }
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.repositoryDescriptor.role, .viewer)
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Current owner version"]
+        )
+        XCTAssertTrue(cloudService.savedSnapshots.isEmpty)
+        XCTAssertTrue(
+            cloudService.uploadAuthorizationDescriptors.isEmpty
+        )
+        XCTAssertNil(try outboxStore.load())
+        let recoveryFiles = try FileManager.default
+            .contentsOfDirectory(
+                at: outboxStore.recoveryDirectoryURL,
+                includingPropertiesForKeys: nil
+            )
+        XCTAssertEqual(
+            recoveryFiles.filter {
+                $0.pathExtension == "json"
+            }.count,
+            1
+        )
+        let repairedReference = try XCTUnwrap(
+            libraryStore.loadCatalog().first {
+                $0.id == repositoryID
+            }
+        )
+        XCTAssertEqual(repairedReference.descriptor.role, .viewer)
+        XCTAssertNil(
+            repairedReference.pendingCloudUploadGeneration
+        )
+        XCTAssertNil(
+            repairedReference.cloudUploadConflictDetectedAt
+        )
+        XCTAssertEqual(
+            try libraryStore.repositoryStore(
+                for: repositoryID
+            ).loadDescriptor()?.role,
+            .viewer
+        )
+    }
+
+    @MainActor
+    func testServerPermissionDowngradeSuspendsEditorUploadBeforeSave() async throws {
+        let rootURL = makeTempDirectory()
+        let editorDescriptor = RepositoryDescriptor(
+            zoneName: "server-downgrade-zone",
+            zoneOwnerName: "_server_downgrade_owner_",
+            shareRecordName: "server-downgrade-share",
+            role: .editor
+        )
+        var viewerDescriptor = editorDescriptor
+        viewerDescriptor.role = .viewer
+        let repositoryID = editorDescriptor.storageIdentifier
+        let pendingDate = fixtureDate("2026-07-23T10:20:00Z")
+        let remoteDate = fixtureDate("2026-07-23T10:25:00Z")
+        let pendingSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Pending before downgrade",
+                    happenedAt: pendingDate
+                )
+            ],
+            updatedAt: pendingDate
+        )
+        let remoteSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Read-only remote state",
+                    happenedAt: remoteDate
+                )
+            ],
+            updatedAt: remoteDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Server Permission Downgrade",
+            descriptor: editorDescriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: pendingDate,
+            lastKnownServerRecordChangeTag: "editor-tag",
+            pendingCloudUploadAt: pendingDate,
+            pendingCloudUploadGeneration: 1,
+            pendingCloudUploadBaseChangeTag: "editor-tag"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: pendingSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        try outboxStore.save(
+            CloudUploadOutboxRecord(
+                repositoryID: repositoryID,
+                descriptor: editorDescriptor,
+                displayName: reference.displayName,
+                snapshot: pendingSnapshot,
+                generation: 1,
+                baseRecordChangeTag: "editor-tag",
+                baseSnapshot: RepositorySnapshot(
+                    entries: [],
+                    updatedAt:
+                        pendingDate.addingTimeInterval(-1)
+                ),
+                createdAt: pendingDate
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.validatedUploadDescriptor =
+            viewerDescriptor
+        cloudService.loadedSnapshot = remoteSnapshot
+        cloudService.metadataRecordChangeTag = "remote-tag"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { remoteDate }
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(
+            cloudService.uploadAuthorizationDescriptors,
+            [editorDescriptor]
+        )
+        XCTAssertTrue(cloudService.savedSnapshots.isEmpty)
+        XCTAssertEqual(store.repositoryDescriptor.role, .viewer)
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Read-only remote state"]
+        )
+        XCTAssertEqual(
+            store.alertMessage,
+            L10n.string(
+                "The shared repository is now read-only. Unuploaded changes were kept on this device for recovery and will not be uploaded."
+            )
+        )
+        XCTAssertNil(try outboxStore.load())
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(
+                at: outboxStore.recoveryDirectoryURL,
+                includingPropertiesForKeys: nil
+            ).isEmpty
+        )
+        let downgradedReference = try XCTUnwrap(
+            libraryStore.loadCatalog().first {
+                $0.id == repositoryID
+            }
+        )
+        XCTAssertEqual(
+            downgradedReference.descriptor.role,
+            .viewer
+        )
+        XCTAssertNil(
+            downgradedReference.pendingCloudUploadGeneration
+        )
+    }
+
+    @MainActor
+    func testPermissionFailureAfterValidationAlsoSuspendsEditorUpload() async throws {
+        let rootURL = makeTempDirectory()
+        let editorDescriptor = RepositoryDescriptor(
+            zoneName: "permission-race-zone",
+            zoneOwnerName: "_permission_race_owner_",
+            shareRecordName: "permission-race-share",
+            role: .editor
+        )
+        let repositoryID = editorDescriptor.storageIdentifier
+        let pendingDate = fixtureDate(
+            "2026-07-23T10:30:00Z"
+        )
+        let remoteDate = fixtureDate(
+            "2026-07-23T10:35:00Z"
+        )
+        let pendingSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Permission race local draft",
+                    happenedAt: pendingDate
+                )
+            ],
+            updatedAt: pendingDate
+        )
+        let remoteSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Permission race owner copy",
+                    happenedAt: remoteDate
+                )
+            ],
+            updatedAt: remoteDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Permission Race",
+            descriptor: editorDescriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: pendingDate,
+            lastKnownServerRecordChangeTag:
+                "permission-race-base",
+            pendingCloudUploadAt: pendingDate,
+            pendingCloudUploadGeneration: 1,
+            pendingCloudUploadBaseChangeTag:
+                "permission-race-base"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: pendingSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        try outboxStore.save(
+            CloudUploadOutboxRecord(
+                repositoryID: repositoryID,
+                descriptor: editorDescriptor,
+                displayName: reference.displayName,
+                snapshot: pendingSnapshot,
+                generation: 1,
+                baseRecordChangeTag:
+                    "permission-race-base",
+                baseSnapshot: RepositorySnapshot(
+                    entries: [],
+                    updatedAt:
+                        pendingDate.addingTimeInterval(-1)
+                ),
+                createdAt: pendingDate
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.saveSnapshotError = NSError(
+            domain: CKErrorDomain,
+            code: CKError.Code.permissionFailure.rawValue
+        )
+        cloudService.loadedSnapshot = remoteSnapshot
+        cloudService.metadataRecordChangeTag =
+            "permission-race-remote"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { remoteDate }
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(
+            cloudService.uploadAuthorizationDescriptors,
+            [editorDescriptor]
+        )
+        XCTAssertEqual(
+            cloudService.savedSnapshots.count,
+            1
+        )
+        XCTAssertEqual(store.repositoryDescriptor.role, .viewer)
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Permission race owner copy"]
+        )
+        XCTAssertNil(try outboxStore.load())
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(
+                at: outboxStore.recoveryDirectoryURL,
+                includingPropertiesForKeys: nil
+            ).isEmpty
+        )
+        let downgradedReference = try XCTUnwrap(
+            libraryStore.loadCatalog().first {
+                $0.id == repositoryID
+            }
+        )
+        XCTAssertEqual(
+            downgradedReference.descriptor.role,
+            .viewer
+        )
+        XCTAssertNil(
+            downgradedReference.pendingCloudUploadGeneration
+        )
+    }
+
+    @MainActor
     func testPersistedFalseConflictRebasesLocalAndRemoteUpdatesAndResumesOnLaunch() async throws {
         let rootURL = makeTempDirectory()
         let descriptor = RepositoryDescriptor(

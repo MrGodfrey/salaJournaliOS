@@ -146,6 +146,8 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     var loadSnapshotError: Error?
     var saveSnapshotError: Error?
     var saveSnapshotErrors: [Error] = []
+    var validateUploadAuthorizationError: Error?
+    var validatedUploadDescriptor: RepositoryDescriptor?
     var recreateSnapshotError: Error?
     var ensureSubscriptionError: Error?
     var ensureSubscriptionErrorsByRole: [RepositoryRole: Error] = [:]
@@ -164,6 +166,8 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     var savedDescriptors: [RepositoryDescriptor] = []
     var savedExpectedRecordChangeTags: [String?] = []
     var savedAcceptedPredecessorOperationIDs: [Set<UUID>] = []
+    var uploadAuthorizationDescriptors:
+        [RepositoryDescriptor] = []
     var recreatedSnapshots: [RepositorySnapshot] = []
     var recreatedDescriptors: [RepositoryDescriptor] = []
     var recreatedAcceptedPredecessorOperationIDs: [Set<UUID>] = []
@@ -328,6 +332,9 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         expectedRecordChangeTag: String?,
         acceptedPredecessorOperationIDs: Set<UUID>
     ) async throws -> SavedRepositorySnapshot {
+        guard descriptor.role.canEdit else {
+            throw CloudRepositoryError.repositoryLocked
+        }
         savedSnapshots.append(snapshot)
         savedDescriptors.append(descriptor)
         savedExpectedRecordChangeTags.append(expectedRecordChangeTag)
@@ -378,6 +385,16 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
                 metadataRecordChangeTag ??
                 "mock-save-\(savedSnapshots.count)"
         )
+    }
+
+    func validatedDescriptorForUpload(
+        using descriptor: RepositoryDescriptor
+    ) async throws -> RepositoryDescriptor {
+        uploadAuthorizationDescriptors.append(descriptor)
+        if let validateUploadAuthorizationError {
+            throw validateUploadAuthorizationError
+        }
+        return validatedUploadDescriptor ?? descriptor
     }
 
     func recreateSnapshotAfterEncryptedDataReset(
