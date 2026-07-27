@@ -137,12 +137,15 @@ class AppStoreTestCase: XCTestCase {
 }
 
 final class MockCloudRepositoryService: CloudRepositoryServicing {
+    var requiresExplicitAccountIdentityMigrationConfirmation =
+        false
     var loadedSnapshot: RepositorySnapshot?
     var loadedSnapshotsByRepositoryID: [String: RepositorySnapshot] = [:]
     var acceptedSharedRepository: AcceptedSharedRepository?
     var loadMetadataError: Error?
     var loadSnapshotError: Error?
     var saveSnapshotError: Error?
+    var saveSnapshotErrors: [Error] = []
     var recreateSnapshotError: Error?
     var ensureSubscriptionError: Error?
     var ensureSubscriptionErrorsByRole: [RepositoryRole: Error] = [:]
@@ -151,6 +154,11 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     var metadataRecordChangeTag: String?
     var metadataServerModifiedAt: Date?
     var savedRecordChangeTag: String?
+    var loadedSnapshotEnvelope: LoadedRepositorySnapshot?
+    var loadedSnapshotEnvelopes: [LoadedRepositorySnapshot] = []
+    var accountAvailability: CloudAccountAvailability =
+        .available(userRecordName: "mock-cloud-account")
+    var accountAvailabilityError: Error?
     var recreateSnapshotResult: SavedRepositorySnapshot?
     var savedSnapshots: [RepositorySnapshot] = []
     var savedDescriptors: [RepositoryDescriptor] = []
@@ -175,16 +183,34 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     var resetRemoteChangeTrackingCount = 0
     var acceptedShareURLs: [URL] = []
     var acceptedShareMetadataCount = 0
+    var accountAvailabilityRequestCount = 0
     var loadMetadataStartedExpectation: XCTestExpectation?
+    var loadSnapshotEnvelopeStartedExpectation: XCTestExpectation?
+    var accountAvailabilityStartedExpectation: XCTestExpectation?
+    var acceptShareStartedExpectation: XCTestExpectation?
+    var resetRemoteChangeTrackingStartedExpectation:
+        XCTestExpectation?
     var saveSnapshotStartedExpectation: XCTestExpectation?
     var saveSnapshotFinishedExpectation: XCTestExpectation?
     var recreateSnapshotStartedExpectation: XCTestExpectation?
     var recreateSnapshotFinishedExpectation: XCTestExpectation?
     var pauseLoadMetadata = false
+    var pauseLoadSnapshotEnvelope = false
+    var pauseAccountAvailability = false
+    var pauseAcceptShare = false
+    var pauseResetRemoteChangeTracking = false
     var pauseSaveSnapshot = false
     var pauseRecreateSnapshot = false
 
     private var loadMetadataContinuation: CheckedContinuation<Void, Never>?
+    private var loadSnapshotEnvelopeContinuation:
+        CheckedContinuation<Void, Never>?
+    private var accountAvailabilityContinuation:
+        CheckedContinuation<Void, Never>?
+    private var acceptShareContinuation:
+        CheckedContinuation<Void, Never>?
+    private var resetRemoteChangeTrackingContinuation:
+        CheckedContinuation<Void, Never>?
     private var saveSnapshotContinuation: CheckedContinuation<Void, Never>?
     private var recreateSnapshotContinuation: CheckedContinuation<Void, Never>?
 
@@ -246,6 +272,56 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         return try await loadSnapshot(using: descriptor)
     }
 
+    func loadSnapshotWithMetadata(
+        using descriptor: RepositoryDescriptor,
+        availableImageContentHashes: [String: String]
+    ) async throws -> LoadedRepositorySnapshot {
+        availableImageContentHashesByLoad.append(
+            availableImageContentHashes
+        )
+        loadedDescriptors.append(descriptor)
+        loadedMetadataDescriptors.append(descriptor)
+        if pauseLoadSnapshotEnvelope,
+           loadSnapshotEnvelopeContinuation == nil {
+            await withCheckedContinuation { continuation in
+                loadSnapshotEnvelopeContinuation = continuation
+                loadSnapshotEnvelopeStartedExpectation?.fulfill()
+            }
+        } else {
+            loadSnapshotEnvelopeStartedExpectation?.fulfill()
+        }
+        if let loadSnapshotError {
+            throw loadSnapshotError
+        }
+        if let loadMetadataError {
+            throw loadMetadataError
+        }
+        if !loadedSnapshotEnvelopes.isEmpty {
+            return loadedSnapshotEnvelopes.removeFirst()
+        }
+        if let loadedSnapshotEnvelope {
+            return loadedSnapshotEnvelope
+        }
+        guard let loadedSnapshot = snapshot(for: descriptor) else {
+            throw CloudRepositoryError.repositoryNotFound
+        }
+        return LoadedRepositorySnapshot(
+            snapshot: loadedSnapshot,
+            metadata: RepositorySnapshotMetadata(
+                updatedAt: loadedSnapshot.updatedAt,
+                entryCount: loadedSnapshot.entries.count,
+                serverModifiedAt: metadataServerModifiedAt,
+                recordChangeTag: metadataRecordChangeTag
+            )
+        )
+    }
+
+    func resumePausedLoadSnapshotEnvelope() {
+        loadSnapshotEnvelopeContinuation?.resume()
+        loadSnapshotEnvelopeContinuation = nil
+        pauseLoadSnapshotEnvelope = false
+    }
+
     func saveSnapshot(
         _ snapshot: RepositorySnapshot,
         using descriptor: RepositoryDescriptor,
@@ -268,6 +344,11 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
             saveSnapshotStartedExpectation?.fulfill()
         }
 
+        if !saveSnapshotErrors.isEmpty {
+            let error = saveSnapshotErrors.removeFirst()
+            saveSnapshotFinishedExpectation?.fulfill()
+            throw error
+        }
         if let saveSnapshotError {
             saveSnapshotFinishedExpectation?.fulfill()
             throw saveSnapshotError
@@ -357,6 +438,30 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
         }
     }
 
+    func cloudAccountAvailability() async throws
+        -> CloudAccountAvailability {
+        accountAvailabilityRequestCount += 1
+        if pauseAccountAvailability,
+           accountAvailabilityContinuation == nil {
+            await withCheckedContinuation { continuation in
+                accountAvailabilityContinuation = continuation
+                accountAvailabilityStartedExpectation?.fulfill()
+            }
+        } else {
+            accountAvailabilityStartedExpectation?.fulfill()
+        }
+        if let accountAvailabilityError {
+            throw accountAvailabilityError
+        }
+        return accountAvailability
+    }
+
+    func resumePausedAccountAvailability() {
+        accountAvailabilityContinuation?.resume()
+        accountAvailabilityContinuation = nil
+        pauseAccountAvailability = false
+    }
+
     func pendingRepositoryZoneChanges(
         in scope: CloudDatabaseScope
     ) async throws -> CloudRepositoryDatabaseChanges {
@@ -392,6 +497,23 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
 
     func resetRemoteChangeTracking() async throws {
         resetRemoteChangeTrackingCount += 1
+        if pauseResetRemoteChangeTracking,
+           resetRemoteChangeTrackingContinuation == nil {
+            await withCheckedContinuation { continuation in
+                resetRemoteChangeTrackingContinuation =
+                    continuation
+                resetRemoteChangeTrackingStartedExpectation?
+                    .fulfill()
+            }
+        } else {
+            resetRemoteChangeTrackingStartedExpectation?.fulfill()
+        }
+    }
+
+    func resumePausedResetRemoteChangeTracking() {
+        resetRemoteChangeTrackingContinuation?.resume()
+        resetRemoteChangeTrackingContinuation = nil
+        pauseResetRemoteChangeTracking = false
     }
 
     @MainActor
@@ -416,6 +538,15 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     func acceptShare(from url: URL) async throws -> AcceptedSharedRepository {
         acceptedShareURLs.append(url)
 
+        if pauseAcceptShare,
+           acceptShareContinuation == nil {
+            await withCheckedContinuation { continuation in
+                acceptShareContinuation = continuation
+                acceptShareStartedExpectation?.fulfill()
+            }
+        } else {
+            acceptShareStartedExpectation?.fulfill()
+        }
         if let acceptedSharedRepository {
             return acceptedSharedRepository
         }
@@ -426,11 +557,26 @@ final class MockCloudRepositoryService: CloudRepositoryServicing {
     func acceptShare(metadata: CKShare.Metadata) async throws -> AcceptedSharedRepository {
         acceptedShareMetadataCount += 1
 
+        if pauseAcceptShare,
+           acceptShareContinuation == nil {
+            await withCheckedContinuation { continuation in
+                acceptShareContinuation = continuation
+                acceptShareStartedExpectation?.fulfill()
+            }
+        } else {
+            acceptShareStartedExpectation?.fulfill()
+        }
         if let acceptedSharedRepository {
             return acceptedSharedRepository
         }
 
         throw CloudRepositoryError.shareLinkInvalid
+    }
+
+    func resumePausedAcceptShare() {
+        acceptShareContinuation?.resume()
+        acceptShareContinuation = nil
+        pauseAcceptShare = false
     }
 
     private func snapshot(for descriptor: RepositoryDescriptor) -> RepositorySnapshot? {

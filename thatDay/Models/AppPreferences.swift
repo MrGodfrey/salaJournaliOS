@@ -74,6 +74,7 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
     var appTimeZone: AppTimeZone
     var cloudRetryAfter: Date?
     var lastSuccessfulCloudRefreshAt: Date?
+    var cloudAccountUserRecordName: String?
 
     init(
         defaultRepositoryID: String = RepositoryReference.localRepositoryID,
@@ -82,7 +83,8 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
         sharedUpdateNotificationScope: SharedUpdateNotificationScope = .all,
         appTimeZone: AppTimeZone = .system,
         cloudRetryAfter: Date? = nil,
-        lastSuccessfulCloudRefreshAt: Date? = nil
+        lastSuccessfulCloudRefreshAt: Date? = nil,
+        cloudAccountUserRecordName: String? = nil
     ) {
         self.defaultRepositoryID = defaultRepositoryID
         self.isBiometricLockEnabled = isBiometricLockEnabled
@@ -91,6 +93,8 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
         self.appTimeZone = appTimeZone
         self.cloudRetryAfter = cloudRetryAfter
         self.lastSuccessfulCloudRefreshAt = lastSuccessfulCloudRefreshAt
+        self.cloudAccountUserRecordName =
+            cloudAccountUserRecordName
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -101,6 +105,7 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
         case appTimeZone
         case cloudRetryAfter
         case lastSuccessfulCloudRefreshAt
+        case cloudAccountUserRecordName
     }
 
     init(from decoder: any Decoder) throws {
@@ -113,6 +118,10 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
         appTimeZone = try container.decodeIfPresent(AppTimeZone.self, forKey: .appTimeZone) ?? .system
         cloudRetryAfter = try container.decodeIfPresent(Date.self, forKey: .cloudRetryAfter)
         lastSuccessfulCloudRefreshAt = try container.decodeIfPresent(Date.self, forKey: .lastSuccessfulCloudRefreshAt)
+        cloudAccountUserRecordName = try container.decodeIfPresent(
+            String.self,
+            forKey: .cloudAccountUserRecordName
+        )
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -124,5 +133,9 @@ nonisolated struct AppPreferences: Codable, Hashable, Sendable {
         try container.encode(appTimeZone, forKey: .appTimeZone)
         try container.encodeIfPresent(cloudRetryAfter, forKey: .cloudRetryAfter)
         try container.encodeIfPresent(lastSuccessfulCloudRefreshAt, forKey: .lastSuccessfulCloudRefreshAt)
+        try container.encodeIfPresent(
+            cloudAccountUserRecordName,
+            forKey: .cloudAccountUserRecordName
+        )
     }
 }

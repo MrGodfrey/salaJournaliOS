@@ -1024,3 +1024,30 @@
   - 已上架的 `1.2.9` 保持 `READY_FOR_SALE`，未撤回、未下架
 - 文档勘误：
   - README 明确 `BGAppRefreshTask` successor 只有在系统接受请求后才构成后续兜底，避免把 Apple 的 best-effort 调度描述成确定性保证
+
+## 2026-07-27 18:33
+
+- 修复打开应用后出现 “This repository changed in iCloud before the pending local update could upload” 并永久暂停补传的问题：
+  - 根因之一是 `1.2.9` 把任何 `CKAccountChanged` 通知都当成用户更换 Apple ID；实际通知也会在账号状态暂时不可用后恢复时出现，因此会给正常 outbox 写入假冲突标记
+  - 旧逻辑一旦写下该标记，启动补传会跳过仓库，远端刷新又因仍有 pending generation 而推迟，形成无法自行恢复的闭环
+  - 另一个真实竞态位于 CloudKit 预读取与 CAS 写入之间：先前不确定提交可能刚好成功，后续 `.ifServerRecordUnchanged` 会返回 `serverRecordChanged`；旧代码丢弃最新服务端 operation ID，错误进入永久冲突
+- 重建账户切换与冷启动隔离：
+  - 应用先加载本地 catalog / cache，随后核验 CloudKit account status 和稳定用户记录标识；暂时不可用时保留全部缓存与 outbox，按 `60` 秒起步、最长 `15` 分钟的指数退避重试
+  - 收到账户变化后先提升 account epoch、隔离云端读写，并等待旧账户的 refresh、share、encrypted-data-reset 和所有上传者停稳；任何旧 epoch 的晚回响应都不能覆盖缓存、确认 token 或重新解除隔离
+  - 从未保存账户身份的旧版本升级时，只要本机已有云仓库或 pending upload，就要求一次明确的 `Confirm iCloud Account`；只有稳定身份成功持久化后才恢复 CloudKit，选择暂停不会删除任何数据
+  - 账户未确认期间的分享 URL / metadata 会排队；冷启动分享和通知路由会先加载磁盘状态，避免初始空 catalog 覆盖已有仓库或丢失目标页面
+- 将普通共享编辑冲突改为可恢复的无损流程：
+  - `pending-cloud-upload.json` 升级为 v3，持久保存共同基线快照、精确日期位模式、内容摘要和图片哈希清单，同时兼容真实 v2 ISO 8601 / legacy digest 文件
+  - 服务端 operation ID 等于当前操作时恢复本地 receipt，等于 predecessor 时推进基线后有限重试；只有未知 operation ID 才进入三方合并
+  - 三方合并保留双方独立新增和编辑；同一条目双改时保留远端原 UUID，并生成确定性的本地冲突副本；删除只在另一端仍未修改时生效；同图片引用但字节不同会确定性改名保全
+  - 合并 successor 会先原子写入 durable outbox，再更新缓存和 UI；立即恢复最多两次，持续竞争至少等待 `60` 秒且继续尊重 CloudKit retry-after，避免请求风暴
+  - CloudKit payload 的整秒日期规范与本地亚秒时间现在按服务端精度比较，包括 1970 年前负时间戳，不会再制造假冲突
+- 版本与文档：
+  - Marketing Version 更新为 `1.2.11`，build number 更新为 `4`
+  - README 已同步账户确认、三方合并、冷启动排队、CloudKit 限流与 Apple 后台调度边界
+- 验证记录：
+  - 最终只读发布审查未发现剩余 P0 / P1；关键账号隔离、冷启动和冲突路径定向测试 `15/15` 通过
+  - 单元测试 `181/181` 通过，零失败、零跳过；xcresult：`/private/tmp/thatDay-sync-fix-final-unit2-20260727/Logs/Test/Test-thatDay-2026.07.27_18-15-31-+0100.xcresult`
+  - UI 测试最终完整重跑 `32/32` 通过，零失败、零跳过；xcresult：`/private/tmp/thatDay-sync-fix-final-ui3-20260727/Logs/Test/Test-thatDay-2026.07.27_18-26-31-+0100.xcresult`
+  - 首轮完整 UI 中性能采集进程曾无崩溃报告地退出一次；同一性能用例隔离重跑通过，随后全新完整 UI 回归也全部通过
+  - `git diff --check`、Swift 静态解析、`plutil -lint`、build-for-testing 和 `1.2.11 (4)` 无签名 generic iOS Release 构建均通过

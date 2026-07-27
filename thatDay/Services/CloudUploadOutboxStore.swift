@@ -21,7 +21,8 @@ nonisolated enum CloudUploadMode: String, Codable, Equatable, Sendable {
 }
 
 nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
-    static let currentVersion = 2
+    static let currentVersion = 3
+    private static let minimumSupportedVersion = 2
 
     var version: Int
     var repositoryID: String
@@ -30,6 +31,8 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
     var snapshot: RepositorySnapshot
     var generation: Int
     var baseRecordChangeTag: String?
+    var baseSnapshot: RepositorySnapshot?
+    var baseContentDigest: String?
     var operationID: UUID
     var predecessorOperationIDs: [UUID]
     var mode: CloudUploadMode
@@ -45,6 +48,7 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
         snapshot: RepositorySnapshot,
         generation: Int,
         baseRecordChangeTag: String?,
+        baseSnapshot: RepositorySnapshot? = nil,
         operationID: UUID? = nil,
         predecessorOperationIDs: [UUID] = [],
         mode: CloudUploadMode = .normal,
@@ -54,6 +58,8 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
         let resolvedOperationID = operationID ?? UUID()
         var uploadSnapshot = snapshot
         uploadSnapshot.cloudUploadOperationID = resolvedOperationID
+        uploadSnapshot.imageContentHashes =
+            try Self.imageContentHashes(in: uploadSnapshot)
         try Self.validateEmbeddedImageCoverage(in: uploadSnapshot)
 
         version = Self.currentVersion
@@ -63,6 +69,10 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
         self.snapshot = uploadSnapshot
         self.generation = generation
         self.baseRecordChangeTag = baseRecordChangeTag
+        let normalizedBaseSnapshot =
+            baseSnapshot?.removingEmbeddedImages()
+        self.baseSnapshot = normalizedBaseSnapshot
+        baseContentDigest = try normalizedBaseSnapshot.map(Self.digest)
         self.operationID = resolvedOperationID
         self.predecessorOperationIDs = Array(
             Set(
@@ -81,9 +91,36 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
     }
 
     func validatingContent() throws -> CloudUploadOutboxRecord {
-        guard version == Self.currentVersion,
+        let snapshotDigest = try Self.digest(for: snapshot)
+        let legacySnapshotDigest =
+            version == 2
+                ? try Self.legacyDigest(for: snapshot)
+                : nil
+        let hasValidSnapshotDigest =
+            contentDigest == snapshotDigest ||
+            contentDigest == legacySnapshotDigest
+        let hasValidBaseSnapshot: Bool
+        if let baseSnapshot {
+            let baseDigest = try Self.digest(
+                for: baseSnapshot
+            )
+            let legacyBaseDigest =
+                version == 2
+                    ? try Self.legacyDigest(
+                        for: baseSnapshot
+                    )
+                    : nil
+            hasValidBaseSnapshot =
+                baseContentDigest == baseDigest ||
+                baseContentDigest == legacyBaseDigest
+        } else {
+            hasValidBaseSnapshot = baseContentDigest == nil
+        }
+        guard (Self.minimumSupportedVersion...Self.currentVersion)
+                .contains(version),
               snapshot.cloudUploadOperationID == operationID,
-              contentDigest == (try Self.digest(for: snapshot)) else {
+              hasValidSnapshotDigest,
+              hasValidBaseSnapshot else {
             throw CloudRepositoryError.invalidRepositoryData
         }
         try Self.validateEmbeddedImageCoverage(in: snapshot)
@@ -161,15 +198,42 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
 
     mutating func advanceBaseRecordChangeTag(
         _ recordChangeTag: String?,
+        baseSnapshot: RepositorySnapshot? = nil,
         retainingPredecessorOperationIDs retainedOperationIDs: [UUID] = []
-    ) {
+    ) throws {
         baseRecordChangeTag = recordChangeTag
+        if let baseSnapshot {
+            let normalizedBaseSnapshot =
+                baseSnapshot.removingEmbeddedImages()
+            self.baseSnapshot = normalizedBaseSnapshot
+            baseContentDigest =
+                try Self.digest(for: normalizedBaseSnapshot)
+        }
         predecessorOperationIDs = Array(
             Set(retainedOperationIDs).subtracting([operationID])
         ).sorted { $0.uuidString < $1.uuidString }
     }
 
     private static func digest(for snapshot: RepositorySnapshot) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .custom {
+            date,
+            encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(
+                date.timeIntervalSinceReferenceDate.bitPattern
+            )
+        }
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(snapshot)
+        return SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func legacyDigest(
+        for snapshot: RepositorySnapshot
+    ) throws -> String {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -194,6 +258,38 @@ nonisolated struct CloudUploadOutboxRecord: Codable, Equatable, Sendable {
         )
         guard requiredReferences.isSubset(of: embeddedReferences) else {
             throw CloudRepositoryError.invalidRepositoryData
+        }
+    }
+
+    private static func imageContentHashes(
+        in snapshot: RepositorySnapshot
+    ) throws -> [String: String] {
+        let requiredReferences = Set(
+            snapshot.entries.compactMap {
+                normalizedLocalImageReference($0.imageReference)
+            }
+        )
+        let hashesByReference = Dictionary(
+            snapshot.embeddedImages.compactMap {
+                asset -> (String, String)? in
+                guard let reference =
+                        normalizedLocalImageReference(asset.reference) else {
+                    return nil
+                }
+                let digest = SHA256.hash(data: asset.data)
+                    .map { String(format: "%02x", $0) }
+                    .joined()
+                return (reference, digest)
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        guard requiredReferences.isSubset(
+            of: Set(hashesByReference.keys)
+        ) else {
+            throw CloudRepositoryError.invalidRepositoryData
+        }
+        return hashesByReference.filter {
+            requiredReferences.contains($0.key)
         }
     }
 
@@ -238,7 +334,41 @@ nonisolated struct CloudUploadOutboxStore: Sendable {
         }
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom {
+            decoder in
+            let container =
+                try decoder.singleValueContainer()
+            if let bitPattern =
+                    try? container.decode(UInt64.self) {
+                return Date(
+                    timeIntervalSinceReferenceDate:
+                        TimeInterval(bitPattern: bitPattern)
+                )
+            }
+            let rawValue = try container.decode(String.self)
+            let fractionalFormatter =
+                ISO8601DateFormatter()
+            fractionalFormatter.formatOptions = [
+                .withInternetDateTime,
+                .withFractionalSeconds
+            ]
+            if let date = fractionalFormatter.date(
+                from: rawValue
+            ) {
+                return date
+            }
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            guard let date = formatter.date(from: rawValue)
+            else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription:
+                        "Invalid durable outbox date."
+                )
+            }
+            return date
+        }
         return try decoder
             .decode(CloudUploadOutboxRecord.self, from: Data(contentsOf: fileURL))
             .validatingContent()
@@ -250,7 +380,14 @@ nonisolated struct CloudUploadOutboxStore: Sendable {
             withIntermediateDirectories: true
         )
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom {
+            date,
+            encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(
+                date.timeIntervalSinceReferenceDate.bitPattern
+            )
+        }
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(record).write(to: fileURL, options: .atomic)
     }

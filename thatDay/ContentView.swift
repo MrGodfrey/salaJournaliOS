@@ -76,6 +76,26 @@ struct ContentView: View {
         } message: {
             Text(store.alertMessage ?? "")
         }
+        .alert(
+            "Confirm iCloud Account",
+            isPresented:
+                $store
+                    .isCloudAccountMigrationConfirmationPresented
+        ) {
+            Button("This Is the Original Account") {
+                Task {
+                    await store
+                        .confirmCurrentICloudAccountForMigration()
+                }
+            }
+            Button("Keep Sync Paused", role: .cancel) {
+                store.keepCloudAccountMigrationSyncPaused()
+            }
+        } message: {
+            Text(
+                "To protect cached journals and pending updates after this upgrade, confirm that this is the same iCloud account previously used by thatDay. No CloudKit upload or download will run until you confirm."
+            )
+        }
     }
 }
 

@@ -153,6 +153,8 @@
 "The selected image could not be recognized. Choose a different image." = "无法识别所选图片，请换一张试试。";
 "The selected ZIP file could not be read. Choose it again and retry." = "无法读取所选 ZIP 文件，请重新选择后再试。";
 "The current repository is read-only, so blog tags can be viewed here but cannot be changed." = "当前仓库是只读的，因此这里只能查看博客标签，不能修改。";
+"The iCloud account changed. Cached repositories and pending updates remain safely on this device; switch back to the original account to resume sync." = "iCloud 账号已更换。仓库缓存和待上传内容仍安全保存在本机；请切回原账号以继续同步。";
+"iCloud account verification is in progress. The share will be accepted automatically when it finishes." = "正在验证 iCloud 账号；验证完成后会自动接受此共享。";
 "This action cannot be undone." = "此操作无法撤销。";
 "This image could not be compressed below 100KB. Choose a different image." = "这张图片无法压缩到 100KB 以下，请换一张试试。";
 "This entry no longer exists" = "这篇文章已不存在";
@@ -160,6 +162,13 @@
 "This is your personal default. It applies to the current repository because the owner allows All." = "这是你的个人默认设置。由于仓库所有者允许 All，它会应用到当前仓库。";
 "This repository is locked to %@ for every member. Personal Push Updates preferences are ignored here until you switch back to All." = "这个仓库已对所有成员锁定为 %@；在你切回 All 之前，这里的个人 Push Updates 偏好都会被忽略。";
 "This repository changed in iCloud before the pending local update could upload. Both copies were kept; automatic upload is paused to prevent data loss." = "本地待上传更改完成前，iCloud 中的仓库已被其他设备更新。两份内容都已保留；为避免数据丢失，自动上传已暂停。";
+"iCloud and local changes were merged. Conflicting edits were kept as separate entries." = "iCloud 与本地更改已安全合并；同一篇内容的冲突编辑已分别保留为两篇记录。";
+"Confirm iCloud Account" = "确认 iCloud 账号";
+"This Is the Original Account" = "这是原来的账号";
+"Keep Sync Paused" = "保持暂停同步";
+"To protect cached journals and pending updates after this upgrade, confirm that this is the same iCloud account previously used by thatDay. No CloudKit upload or download will run until you confirm." = "为保护升级前缓存的日记和待上传内容，请确认这是此前用于 thatDay 的同一个 iCloud 账号。确认前不会执行任何 CloudKit 上传或下载。";
+"The iCloud account changed while it was being confirmed. Sync remains paused; reopen the app and confirm the original account." = "确认期间 iCloud 账号发生了变化。同步仍保持暂停；请重新打开应用并确认原来的账号。";
+"iCloud account verification is in progress. Try creating the share again when it finishes." = "正在验证 iCloud 账号；验证完成后请重新创建共享。";
 "This iCloud repository was purged. Its local cached data was deleted as requested by iCloud." = "这个 iCloud 仓库已被彻底清除；按照 iCloud 的要求，本机缓存数据也已删除。";
 "This tag is not used by any blog posts and will be removed from the current repository." = "这个标签当前没有被任何博客文章使用，将从当前仓库移除。";
 "this tag" = "该标签";

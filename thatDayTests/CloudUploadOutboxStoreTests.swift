@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import thatDay
@@ -131,10 +132,10 @@ final class CloudUploadOutboxStoreTests: AppStoreTestCase {
 
         let reloaded = try XCTUnwrap(outboxStore.load())
         XCTAssertEqual(reloaded, replacementRecord)
-        var expectedReplacementSnapshot = replacementSnapshot
-        expectedReplacementSnapshot.cloudUploadOperationID =
-            replacementRecord.operationID
-        XCTAssertEqual(reloaded.snapshot, expectedReplacementSnapshot)
+        XCTAssertEqual(
+            reloaded.snapshot,
+            replacementRecord.snapshot
+        )
         XCTAssertEqual(reloaded.snapshot.embeddedImages.first?.data, imageData)
         XCTAssertEqual(reloaded.generation, 41)
         XCTAssertEqual(reloaded.baseRecordChangeTag, "baseline-40")
@@ -384,4 +385,200 @@ final class CloudUploadOutboxStoreTests: AppStoreTestCase {
         )
         XCTAssertNil(try outboxStore.load())
     }
+
+    func testVersionThreeBaselineSnapshotPersistsAndRejectsTampering() throws {
+        let repositoryRootURL = makeTempDirectory()
+            .appendingPathComponent(
+                "baseline-integrity",
+                isDirectory: true
+            )
+        let store = CloudUploadOutboxStore(
+            repositoryRootURL: repositoryRootURL
+        )
+        let snapshotDate =
+            fixtureDate("2026-07-27T06:00:00Z")
+        let baseEntry = makeEntry(
+            title: "Server baseline",
+            happenedAt: snapshotDate
+        )
+        var localEntry = baseEntry
+        localEntry.body = "Pending local edit"
+        let record = try CloudUploadOutboxRecord(
+            repositoryID: "baseline-integrity",
+            descriptor: RepositoryDescriptor(
+                zoneName: "baseline-integrity-zone",
+                zoneOwnerName: "_baseline_integrity_owner_",
+                role: .editor
+            ),
+            displayName: "Baseline Integrity",
+            snapshot: RepositorySnapshot(
+                entries: [localEntry],
+                updatedAt: snapshotDate
+            ),
+            generation: 3,
+            baseRecordChangeTag: "baseline-tag",
+            baseSnapshot: RepositorySnapshot(
+                entries: [baseEntry],
+                updatedAt: snapshotDate
+            ),
+            createdAt: snapshotDate
+        )
+        try store.save(record)
+
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(
+            loaded.version,
+            CloudUploadOutboxRecord.currentVersion
+        )
+        XCTAssertEqual(loaded.baseSnapshot?.entries, [baseEntry])
+        XCTAssertEqual(loaded.baseContentDigest?.count, 64)
+
+        var tampered = loaded
+        tampered.baseSnapshot?.entries[0].body =
+            "Tampered without updating baseline digest"
+        try store.save(tampered)
+        XCTAssertThrowsError(try store.load())
+    }
+
+    func testVersionThreeDigestDetectsSubsecondTimestampTampering() throws {
+        let store = CloudUploadOutboxStore(
+            repositoryRootURL: makeTempDirectory()
+                .appendingPathComponent(
+                    "subsecond-integrity",
+                    isDirectory: true
+                )
+        )
+        let snapshotDate = Date(
+            timeIntervalSinceReferenceDate: 804_751_200.125
+        )
+        let record = try CloudUploadOutboxRecord(
+            repositoryID: "subsecond-integrity",
+            descriptor: RepositoryDescriptor(
+                zoneName: "subsecond-integrity-zone",
+                zoneOwnerName: "_subsecond_integrity_owner_",
+                role: .editor
+            ),
+            displayName: "Subsecond Integrity",
+            snapshot: RepositorySnapshot(
+                entries: [
+                    makeEntry(
+                        title: "Precise timestamp",
+                        happenedAt: snapshotDate
+                    )
+                ],
+                updatedAt: snapshotDate
+            ),
+            generation: 1,
+            baseRecordChangeTag: "subsecond-tag",
+            createdAt: snapshotDate
+        )
+        try store.save(record)
+
+        var tampered = try XCTUnwrap(store.load())
+        tampered.snapshot.entries[0].updatedAt =
+            snapshotDate.addingTimeInterval(0.1)
+        try store.save(tampered)
+
+        XCTAssertThrowsError(try store.load())
+    }
+
+    func testVersionTwoOutboxWithoutBaselineStillLoadsForMigration() throws {
+        let repositoryRootURL = makeTempDirectory()
+            .appendingPathComponent(
+                "version-two-migration",
+                isDirectory: true
+            )
+        let store = CloudUploadOutboxStore(
+            repositoryRootURL: repositoryRootURL
+        )
+        let snapshotDate =
+            fixtureDate("2026-07-27T06:10:00Z")
+        let normalizedRecord = try CloudUploadOutboxRecord(
+            repositoryID: "version-two-migration",
+            descriptor: RepositoryDescriptor(
+                zoneName: "version-two-migration-zone",
+                zoneOwnerName: "_version_two_owner_",
+                role: .editor
+            ),
+            displayName: "Version Two Migration",
+            snapshot: RepositorySnapshot(
+                entries: [
+                    makeEntry(
+                        title: "Legacy pending upload",
+                        happenedAt: snapshotDate
+                    )
+                ],
+                updatedAt: snapshotDate
+            ),
+            generation: 2,
+            baseRecordChangeTag: nil,
+            createdAt: snapshotDate
+        )
+        let digestEncoder = JSONEncoder()
+        digestEncoder.dateEncodingStrategy = .iso8601
+        digestEncoder.outputFormatting = [.sortedKeys]
+        let legacyDigest = SHA256.hash(
+            data: try digestEncoder.encode(
+                normalizedRecord.snapshot
+            )
+        )
+        .map { String(format: "%02x", $0) }
+        .joined()
+        let legacyRecord = LegacyVersionTwoOutbox(
+            repositoryID: normalizedRecord.repositoryID,
+            descriptor: normalizedRecord.descriptor,
+            displayName: normalizedRecord.displayName,
+            snapshot: normalizedRecord.snapshot,
+            generation: normalizedRecord.generation,
+            baseRecordChangeTag:
+                normalizedRecord.baseRecordChangeTag,
+            operationID: normalizedRecord.operationID,
+            predecessorOperationIDs:
+                normalizedRecord.predecessorOperationIDs,
+            mode: normalizedRecord.mode,
+            contentDigest: legacyDigest,
+            createdAt: normalizedRecord.createdAt,
+            receipt: normalizedRecord.receipt,
+            encryptedResetAcknowledgement:
+                normalizedRecord
+                    .encryptedResetAcknowledgement
+        )
+        let legacyEncoder = JSONEncoder()
+        legacyEncoder.dateEncodingStrategy = .iso8601
+        legacyEncoder.outputFormatting = [
+            .prettyPrinted,
+            .sortedKeys
+        ]
+        try FileManager.default.createDirectory(
+            at: repositoryRootURL,
+            withIntermediateDirectories: true
+        )
+        try legacyEncoder.encode(legacyRecord).write(
+            to: store.fileURL,
+            options: .atomic
+        )
+
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.version, 2)
+        XCTAssertNil(loaded.baseSnapshot)
+        XCTAssertNil(loaded.baseContentDigest)
+    }
+}
+
+private struct LegacyVersionTwoOutbox: Encodable {
+    let version = 2
+    var repositoryID: String
+    var descriptor: RepositoryDescriptor
+    var displayName: String
+    var snapshot: RepositorySnapshot
+    var generation: Int
+    var baseRecordChangeTag: String?
+    var operationID: UUID
+    var predecessorOperationIDs: [UUID]
+    var mode: CloudUploadMode
+    var contentDigest: String
+    var createdAt: Date
+    var receipt: CloudUploadReceipt?
+    var encryptedResetAcknowledgement:
+        EncryptedResetAcknowledgement?
 }

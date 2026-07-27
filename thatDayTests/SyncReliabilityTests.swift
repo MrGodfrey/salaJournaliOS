@@ -1575,7 +1575,7 @@ final class SyncReliabilityTests: AppStoreTestCase {
     }
 
     @MainActor
-    func testCloudConflictUsesPersistedBaselineAndKeepsSnapshotAndOutboxAcrossRestart() async throws {
+    func testPersistedFalseConflictRebasesLocalAndRemoteUpdatesAndResumesOnLaunch() async throws {
         let rootURL = makeTempDirectory()
         let descriptor = RepositoryDescriptor(
             zoneName: "conflicting-upload-zone",
@@ -1586,124 +1586,1678 @@ final class SyncReliabilityTests: AppStoreTestCase {
         let repositoryID = descriptor.storageIdentifier
         let initialDate = fixtureDate("2026-07-23T11:00:00Z")
         let saveDate = fixtureDate("2026-07-23T11:30:00Z")
-        let initialSnapshot = RepositorySnapshot(
-            entries: [makeEntry(title: "Server baseline entry", happenedAt: initialDate)],
+        let baselineEntry = makeEntry(
+            title: "Server baseline entry",
+            happenedAt: initialDate
+        )
+        let localEntry = makeEntry(
+            title: "Local entry protected from overwrite",
+            happenedAt: saveDate
+        )
+        let remoteEntry = makeEntry(
+            title: "Girlfriend remote entry",
+            happenedAt: saveDate
+        )
+        let baselineSnapshot = RepositorySnapshot(
+            entries: [baselineEntry],
             updatedAt: initialDate
+        )
+        let pendingLocalSnapshot = RepositorySnapshot(
+            entries: [baselineEntry, localEntry],
+            updatedAt: saveDate
+        )
+        let remoteSnapshot = RepositorySnapshot(
+            entries: [baselineEntry, remoteEntry],
+            updatedAt: saveDate,
+            cloudUploadOperationID: UUID()
         )
         let reference = RepositoryReference(
             id: repositoryID,
             displayName: "Conflicting Upload Repository",
             descriptor: descriptor,
             source: .shared,
-            lastKnownSnapshotUpdatedAt: initialDate,
-            lastKnownServerRecordChangeTag: "persisted-baseline-tag"
+            lastKnownSnapshotUpdatedAt: saveDate,
+            lastKnownServerRecordChangeTag:
+                "persisted-baseline-tag",
+            pendingCloudUploadAt: saveDate,
+            pendingCloudUploadGeneration: 1,
+            pendingCloudUploadBaseChangeTag:
+                "persisted-baseline-tag",
+            cloudUploadConflictServerChangeTag:
+                "newer-server-tag",
+            cloudUploadConflictDetectedAt: saveDate
         )
         let libraryStore = try makeCloudBackedLibrary(
             rootURL: rootURL,
             references: [reference],
-            snapshotsByRepositoryID: [repositoryID: initialSnapshot],
+            snapshotsByRepositoryID: [
+                repositoryID: pendingLocalSnapshot
+            ],
             preferences: AppPreferences(
                 defaultRepositoryID: repositoryID,
                 isBiometricLockEnabled: false,
-                isSharedUpdateNotificationEnabled: false
+                isSharedUpdateNotificationEnabled: false,
+                cloudAccountUserRecordName: "account-a"
             )
         )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        try outboxStore.save(
+            CloudUploadOutboxRecord(
+                repositoryID: repositoryID,
+                descriptor: descriptor,
+                displayName: reference.displayName,
+                snapshot: pendingLocalSnapshot,
+                generation: 1,
+                baseRecordChangeTag:
+                    "persisted-baseline-tag",
+                baseSnapshot: baselineSnapshot,
+                createdAt: saveDate
+            )
+        )
+
         let cloudService = MockCloudRepositoryService()
-        cloudService.loadedSnapshot = initialSnapshot
-        cloudService.metadataRecordChangeTag = "persisted-baseline-tag"
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = remoteSnapshot
+        cloudService.metadataRecordChangeTag = "merged-tag"
+        cloudService.loadedSnapshotEnvelope =
+            LoadedRepositorySnapshot(
+                snapshot: remoteSnapshot,
+                metadata: RepositorySnapshotMetadata(
+                    updatedAt: saveDate,
+                    entryCount: remoteSnapshot.entries.count,
+                    recordChangeTag: "newer-server-tag"
+                )
+            )
+        cloudService.saveSnapshotErrors = [
+            CloudRepositoryError.repositoryConflict(
+                serverRecordChangeTag: "newer-server-tag"
+            )
+        ]
+        cloudService.savedRecordChangeTag = "merged-tag"
+        let completedUploads = expectation(
+            description:
+                "stale upload conflicts once and merged successor succeeds"
+        )
+        completedUploads.expectedFulfillmentCount = 2
+        cloudService.saveSnapshotFinishedExpectation =
+            completedUploads
         let store = AppStore(
             libraryStore: libraryStore,
             cloudService: cloudService,
             now: { saveDate }
         )
-        await store.loadIfNeeded()
 
+        await store.loadIfNeeded()
+        await fulfillment(of: [completedUploads], timeout: 2)
+
+        let completedReference = try XCTUnwrap(
+            libraryStore.loadCatalog().first(where: { $0.id == repositoryID })
+        )
+        XCTAssertNil(completedReference.pendingCloudUploadAt)
+        XCTAssertNil(
+            completedReference.pendingCloudUploadGeneration
+        )
+        XCTAssertNil(
+            completedReference.cloudUploadConflictDetectedAt
+        )
+        XCTAssertNil(try outboxStore.load())
+        XCTAssertEqual(
+            cloudService.savedExpectedRecordChangeTags,
+            ["persisted-baseline-tag", "newer-server-tag"]
+        )
+        let mergedSnapshot = try XCTUnwrap(
+            libraryStore.repositoryStore(for: repositoryID).loadSnapshot()
+        )
+        XCTAssertEqual(
+            Set(mergedSnapshot.entries.map(\.title)),
+            Set([
+                "Server baseline entry",
+                "Local entry protected from overwrite",
+                "Girlfriend remote entry"
+            ])
+        )
+        XCTAssertEqual(
+            Set(cloudService.savedSnapshots.last?.entries.map(
+                \.title
+            ) ?? []),
+            Set([
+                "Server baseline entry",
+                "Local entry protected from overwrite",
+                "Girlfriend remote entry"
+            ])
+        )
+        XCTAssertEqual(
+            store.entries.filter {
+                $0.title == "Girlfriend remote entry"
+            }.count,
+            1
+        )
+    }
+
+    @MainActor
+    func testConflictRevalidationTreatsMatchingRemoteOperationAsCommitted() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "matching-operation-zone",
+            zoneOwnerName: "_matching_operation_owner_",
+            shareRecordName: "matching-operation-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate = fixtureDate("2026-07-23T11:40:00Z")
+        let pendingSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Already accepted remotely",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let operationID = UUID()
+        let outbox = try CloudUploadOutboxRecord(
+            repositoryID: repositoryID,
+            descriptor: descriptor,
+            displayName: "Matching Operation",
+            snapshot: pendingSnapshot,
+            generation: 1,
+            baseRecordChangeTag: "tag-a",
+            baseSnapshot: RepositorySnapshot(
+                entries: [],
+                updatedAt: snapshotDate.addingTimeInterval(-1)
+            ),
+            operationID: operationID,
+            createdAt: snapshotDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Matching Operation",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a",
+            pendingCloudUploadAt: snapshotDate,
+            pendingCloudUploadGeneration: 1,
+            pendingCloudUploadBaseChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: pendingSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        try outboxStore.save(outbox)
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = outbox.snapshot
+        cloudService.metadataRecordChangeTag = "tag-b"
+        cloudService.loadedSnapshotEnvelope =
+            LoadedRepositorySnapshot(
+                snapshot: outbox.snapshot,
+                metadata: RepositorySnapshotMetadata(
+                    updatedAt: snapshotDate,
+                    entryCount: outbox.snapshot.entries.count,
+                    recordChangeTag: "tag-b"
+                )
+            )
+        cloudService.saveSnapshotErrors = [
+            CloudRepositoryError.repositoryConflict(
+                serverRecordChangeTag: "tag-b"
+            )
+        ]
+        let attemptedUpload = expectation(
+            description: "uncertain upload is revalidated"
+        )
+        cloudService.saveSnapshotFinishedExpectation =
+            attemptedUpload
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+
+        await store.loadIfNeeded()
+        await fulfillment(of: [attemptedUpload], timeout: 2)
+
+        XCTAssertEqual(cloudService.savedSnapshots.count, 1)
+        XCTAssertNil(try outboxStore.load())
+        let completedReference = try XCTUnwrap(
+            libraryStore.loadCatalog().first {
+                $0.id == repositoryID
+            }
+        )
+        XCTAssertNil(
+            completedReference.pendingCloudUploadGeneration
+        )
+        XCTAssertEqual(
+            completedReference.lastKnownServerRecordChangeTag,
+            "tag-b"
+        )
+        XCTAssertEqual(
+            try libraryStore.repositoryStore(for: repositoryID)
+                .loadSnapshot()?.cloudUploadOperationID,
+            operationID
+        )
+    }
+
+    @MainActor
+    func testConflictRevalidationAdvancesFromAcceptedPredecessorAndRetries() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "predecessor-operation-zone",
+            zoneOwnerName: "_predecessor_operation_owner_",
+            shareRecordName: "predecessor-operation-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate = fixtureDate("2026-07-23T11:50:00Z")
+        let predecessorID = UUID()
+        let remoteSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Accepted predecessor",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate,
+            cloudUploadOperationID: predecessorID
+        )
+        let pendingSnapshot = RepositorySnapshot(
+            entries: remoteSnapshot.entries + [
+                makeEntry(
+                    title: "Successor edit",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let outbox = try CloudUploadOutboxRecord(
+            repositoryID: repositoryID,
+            descriptor: descriptor,
+            displayName: "Predecessor Operation",
+            snapshot: pendingSnapshot,
+            generation: 2,
+            baseRecordChangeTag: "tag-a",
+            baseSnapshot: remoteSnapshot,
+            predecessorOperationIDs: [predecessorID],
+            createdAt: snapshotDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Predecessor Operation",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a",
+            pendingCloudUploadAt: snapshotDate,
+            pendingCloudUploadGeneration: 2,
+            pendingCloudUploadBaseChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: pendingSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        try outboxStore.save(outbox)
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = pendingSnapshot
+        cloudService.metadataRecordChangeTag = "tag-c"
+        cloudService.loadedSnapshotEnvelope =
+            LoadedRepositorySnapshot(
+                snapshot: remoteSnapshot,
+                metadata: RepositorySnapshotMetadata(
+                    updatedAt: snapshotDate,
+                    entryCount: remoteSnapshot.entries.count,
+                    recordChangeTag: "tag-b"
+                )
+            )
+        cloudService.saveSnapshotErrors = [
+            CloudRepositoryError.repositoryConflict(
+                serverRecordChangeTag: "tag-b"
+            )
+        ]
+        cloudService.savedRecordChangeTag = "tag-c"
+        let completedUploads = expectation(
+            description:
+                "predecessor is recognized and successor retries"
+        )
+        completedUploads.expectedFulfillmentCount = 2
+        cloudService.saveSnapshotFinishedExpectation =
+            completedUploads
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+
+        await store.loadIfNeeded()
+        await fulfillment(of: [completedUploads], timeout: 2)
+
+        XCTAssertEqual(
+            cloudService.savedExpectedRecordChangeTags,
+            ["tag-a", "tag-b"]
+        )
+        XCTAssertEqual(
+            cloudService.savedAcceptedPredecessorOperationIDs,
+            [Set([predecessorID]), []]
+        )
+        XCTAssertNil(try outboxStore.load())
+        XCTAssertNil(
+            try libraryStore.loadCatalog().first {
+                $0.id == repositoryID
+            }?.pendingCloudUploadGeneration
+        )
+    }
+
+    @MainActor
+    func testConflictRefetchCannotOverwriteNewerLocalGeneration() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "conflict-generation-zone",
+            zoneOwnerName: "_conflict_generation_owner_",
+            shareRecordName: "conflict-generation-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate = fixtureDate("2026-07-23T11:53:00Z")
+        let baselineEntry = makeEntry(
+            title: "Baseline",
+            happenedAt: snapshotDate
+        )
+        let initialSnapshot = RepositorySnapshot(
+            entries: [baselineEntry],
+            updatedAt: snapshotDate
+        )
+        let remoteSnapshot = RepositorySnapshot(
+            entries: [
+                baselineEntry,
+                makeEntry(
+                    title: "Remote during refetch",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate,
+            cloudUploadOperationID: UUID()
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Conflict Generation",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: initialSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = initialSnapshot
+        cloudService.metadataRecordChangeTag = "tag-a"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+        await store.loadIfNeeded()
         cloudService.savedSnapshots.removeAll()
         cloudService.savedExpectedRecordChangeTags.removeAll()
-        cloudService.saveSnapshotError = CloudRepositoryError.repositoryConflict(
-            serverRecordChangeTag: "newer-server-tag"
-        )
-        let conflictedUpload = expectation(description: "cloud upload detects a server conflict")
-        cloudService.saveSnapshotFinishedExpectation = conflictedUpload
+        cloudService.loadedSnapshot = remoteSnapshot
+        cloudService.metadataRecordChangeTag = "tag-c"
+        cloudService.loadedSnapshotEnvelope =
+            LoadedRepositorySnapshot(
+                snapshot: remoteSnapshot,
+                metadata: RepositorySnapshotMetadata(
+                    updatedAt: snapshotDate,
+                    entryCount: remoteSnapshot.entries.count,
+                    recordChangeTag: "tag-b"
+                )
+            )
+        cloudService.saveSnapshotErrors = [
+            CloudRepositoryError.repositoryConflict(
+                serverRecordChangeTag: "tag-b"
+            ),
+            CloudRepositoryError.repositoryConflict(
+                serverRecordChangeTag: "tag-b"
+            )
+        ]
+        cloudService.savedRecordChangeTag = "tag-c"
 
-        let didSave = await store.saveEntry(
+        let refetchStarted = expectation(
+            description: "generation one conflict refetch pauses"
+        )
+        cloudService.pauseLoadSnapshotEnvelope = true
+        cloudService.loadSnapshotEnvelopeStartedExpectation =
+            refetchStarted
+        let completedUploads = expectation(
+            description:
+                "both stale attempts and merged successor complete"
+        )
+        completedUploads.expectedFulfillmentCount = 3
+        cloudService.saveSnapshotFinishedExpectation =
+            completedUploads
+
+        let didSaveFirstGeneration = await store.saveEntry(
             draft: EntryDraft(
                 kind: .journal,
-                title: "Local entry protected from overwrite",
-                body: "This local copy must survive the conflict and relaunch.",
-                happenedAt: saveDate
+                title: "First local generation",
+                body: "Generation one",
+                happenedAt: snapshotDate
             ),
             importedImageData: nil
         )
+        XCTAssertTrue(didSaveFirstGeneration)
+        await fulfillment(of: [refetchStarted], timeout: 2)
+        cloudService.loadSnapshotEnvelopeStartedExpectation =
+            nil
 
+        let didSaveSecondGeneration = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: "Second local generation",
+                body: "Generation two",
+                happenedAt: snapshotDate
+            ),
+            importedImageData: nil
+        )
+        XCTAssertTrue(didSaveSecondGeneration)
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        let newerOutbox = try XCTUnwrap(outboxStore.load())
+        XCTAssertEqual(newerOutbox.generation, 2)
+        XCTAssertEqual(
+            Set(newerOutbox.snapshot.entries.map(\.title)),
+            Set([
+                "Baseline",
+                "First local generation",
+                "Second local generation"
+            ])
+        )
+
+        cloudService.resumePausedLoadSnapshotEnvelope()
+        await fulfillment(of: [completedUploads], timeout: 2)
+        cloudService.saveSnapshotFinishedExpectation = nil
+
+        XCTAssertEqual(
+            cloudService.savedExpectedRecordChangeTags,
+            ["tag-a", "tag-a", "tag-b"]
+        )
+        XCTAssertEqual(
+            Set(cloudService.savedSnapshots.last?.entries.map(
+                \.title
+            ) ?? []),
+            Set([
+                "Baseline",
+                "First local generation",
+                "Second local generation",
+                "Remote during refetch"
+            ])
+        )
+        XCTAssertEqual(
+            Set(store.entries.map(\.title)),
+            Set([
+                "Baseline",
+                "First local generation",
+                "Second local generation",
+                "Remote during refetch"
+            ])
+        )
+        XCTAssertNil(try outboxStore.load())
+    }
+
+    @MainActor
+    func testColdStartShowsCacheAndDurablyQueuesEditsUntilAccountVerificationCompletes() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "slow-account-zone",
+            zoneOwnerName: "_slow_account_owner_",
+            shareRecordName: "slow-account-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate = fixtureDate("2026-07-23T11:55:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Immediately visible cache",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Slow Account",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: initialSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.pauseAccountAvailability = true
+        cloudService.loadedSnapshot = initialSnapshot
+        cloudService.metadataRecordChangeTag = "tag-b"
+        cloudService.savedRecordChangeTag = "tag-b"
+        let accountLookupStarted = expectation(
+            description: "account lookup pauses after cache load"
+        )
+        cloudService.accountAvailabilityStartedExpectation =
+            accountLookupStarted
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+
+        let loadTask = Task {
+            await store.loadIfNeeded()
+        }
+        await fulfillment(
+            of: [accountLookupStarted],
+            timeout: 2
+        )
+
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Immediately visible cache"]
+        )
+        let didSave = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: "Written while account lookup is slow",
+                body: "This must remain local until identity is known.",
+                happenedAt: snapshotDate
+            ),
+            importedImageData: nil
+        )
         XCTAssertTrue(didSave)
-        await fulfillment(of: [conflictedUpload], timeout: 1.0)
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        XCTAssertTrue(cloudService.savedSnapshots.isEmpty)
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        let pendingOutbox = try XCTUnwrap(
+            outboxStore.load()
+        )
+
+        let uploadCompleted = expectation(
+            description:
+                "queued edit uploads after identity verification"
+        )
+        cloudService.saveSnapshotFinishedExpectation =
+            uploadCompleted
+        cloudService.resumePausedAccountAvailability()
+        await loadTask.value
+        await fulfillment(of: [uploadCompleted], timeout: 2)
+
+        XCTAssertEqual(cloudService.savedSnapshots.count, 1)
+        XCTAssertEqual(
+            cloudService.savedSnapshots.first?
+                .cloudUploadOperationID,
+            pendingOutbox.operationID
+        )
+        XCTAssertNil(try outboxStore.load())
+    }
+
+    @MainActor
+    func testTemporarilyUnavailableAccountSchedulesBoundedRetryAndResumesSameAccount() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "temporary-account-zone",
+            zoneOwnerName: "_temporary_account_owner_",
+            shareRecordName: "temporary-account-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate = fixtureDate("2026-07-23T11:56:30Z")
+        var currentDate = snapshotDate
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Available offline",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Temporary Account",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: initialSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let retrySleeper = ControlledSharedCloudRetrySleeper()
+        var scheduledBackgroundDeadlines: [Date] = []
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability = .temporarilyUnavailable
+        cloudService.loadedSnapshot = initialSnapshot
+        cloudService.metadataRecordChangeTag = "tag-a"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { currentDate },
+            sleepUntilSharedCloudRetry: { deadline in
+                await retrySleeper.sleep(until: deadline)
+            },
+            scheduleBackgroundRefreshAfter: { deadline in
+                scheduledBackgroundDeadlines.append(deadline)
+            }
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertEqual(store.entries.map(\.title), ["Available offline"])
+        XCTAssertEqual(cloudService.accountAvailabilityRequestCount, 1)
         for _ in 0..<100 {
-            if try libraryStore.loadCatalog().first(where: {
-                $0.id == repositoryID
-            })?.cloudUploadConflictDetectedAt != nil {
+            if !(await retrySleeper.deadlines()).isEmpty {
                 break
             }
             await Task.yield()
         }
-        XCTAssertEqual(cloudService.savedExpectedRecordChangeTags, ["persisted-baseline-tag"])
+        let retryDeadline = snapshotDate.addingTimeInterval(60)
+        let recordedRetryDeadlines = await retrySleeper.deadlines()
+        XCTAssertEqual(recordedRetryDeadlines, [retryDeadline])
+        XCTAssertEqual(scheduledBackgroundDeadlines, [retryDeadline])
 
-        let conflictedReference = try XCTUnwrap(
-            libraryStore.loadCatalog().first(where: { $0.id == repositoryID })
-        )
-        XCTAssertEqual(conflictedReference.pendingCloudUploadAt, saveDate)
-        XCTAssertEqual(conflictedReference.pendingCloudUploadGeneration, 1)
-        XCTAssertEqual(
-            conflictedReference.pendingCloudUploadBaseChangeTag,
-            "persisted-baseline-tag"
-        )
-        XCTAssertEqual(
-            conflictedReference.cloudUploadConflictServerChangeTag,
-            "newer-server-tag"
-        )
-        XCTAssertEqual(conflictedReference.cloudUploadConflictDetectedAt, saveDate)
-        let locallySavedSnapshot = try XCTUnwrap(
-            libraryStore.repositoryStore(for: repositoryID).loadSnapshot()
-        )
-        XCTAssertEqual(
-            locallySavedSnapshot.entries.filter {
-                $0.title == "Local entry protected from overwrite"
-            }.count,
-            1
-        )
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        currentDate = retryDeadline
+        await retrySleeper.resume()
+        for _ in 0..<100 {
+            if cloudService.accountAvailabilityRequestCount == 2,
+               !cloudService
+                .ensuredSubscriptionDescriptors.isEmpty {
+                break
+            }
+            await Task.yield()
+        }
 
-        let reconstructedCloudService = MockCloudRepositoryService()
-        reconstructedCloudService.loadedSnapshot = initialSnapshot
-        reconstructedCloudService.metadataRecordChangeTag = "newer-server-tag"
-        let reconstructedStore = AppStore(
+        XCTAssertEqual(cloudService.accountAvailabilityRequestCount, 2)
+        XCTAssertFalse(cloudService.ensuredSubscriptionDescriptors.isEmpty)
+    }
+
+    @MainActor
+    func testAccountChangeDrainsInflightRefreshBeforeOldAccountCanOverwriteCache() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "account-refresh-race-zone",
+            zoneOwnerName: "_account_refresh_race_owner_",
+            shareRecordName: "account-refresh-race-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate =
+            fixtureDate("2026-07-23T11:56:40Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Account A cache",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let remoteSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Late account A response",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate.addingTimeInterval(1)
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Account Refresh Race",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: initialSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = initialSnapshot
+        cloudService.metadataRecordChangeTag = "tag-a"
+        let store = AppStore(
             libraryStore: libraryStore,
-            cloudService: reconstructedCloudService,
-            now: { self.fixtureDate("2026-07-23T11:31:00Z") }
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+        await store.loadIfNeeded()
+
+        cloudService.loadedSnapshot = remoteSnapshot
+        cloudService.metadataRecordChangeTag = "tag-b"
+        let zoneID = CloudRepositoryZoneIdentity(
+            ownerName:
+                try XCTUnwrap(descriptor.zoneOwnerName),
+            zoneName: try XCTUnwrap(descriptor.zoneName)
+        )
+        cloudService.changedZoneIDsByScope[
+            .sharedDatabase
+        ] = [zoneID]
+        cloudService.pauseLoadMetadata = true
+        let refreshStarted = expectation(
+            description: "account A refresh is in flight"
+        )
+        cloudService.loadMetadataStartedExpectation =
+            refreshStarted
+        let refreshTask = Task {
+            await store.refreshSharedRepositories(
+                trigger: .push,
+                target: .database(.sharedDatabase)
+            )
+        }
+        await fulfillment(of: [refreshStarted], timeout: 2)
+        cloudService.loadMetadataStartedExpectation = nil
+
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-b")
+        let accountChangeTask = Task {
+            await store.handleCloudAccountChange()
+        }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        XCTAssertEqual(
+            cloudService.accountAvailabilityRequestCount,
+            1,
+            "Account lookup must wait until the old refresh drains."
         )
 
-        await reconstructedStore.loadIfNeeded()
+        cloudService.resumePausedLoadMetadata()
+        _ = await refreshTask.value
+        await accountChangeTask.value
 
-        XCTAssertTrue(reconstructedCloudService.savedSnapshots.isEmpty)
-        XCTAssertTrue(reconstructedCloudService.savedExpectedRecordChangeTags.isEmpty)
+        let cachedSnapshot = try XCTUnwrap(
+            libraryStore.repositoryStore(
+                for: repositoryID
+            ).loadSnapshot()
+        )
         XCTAssertEqual(
-            reconstructedStore.entries.filter {
-                $0.title == "Local entry protected from overwrite"
-            }.count,
+            cachedSnapshot.entries.map(\.title),
+            ["Account A cache"]
+        )
+        XCTAssertEqual(
+            try libraryStore.loadCatalog().first {
+                $0.id == repositoryID
+            }?.lastKnownServerRecordChangeTag,
+            "tag-a"
+        )
+        XCTAssertTrue(
+            cloudService
+                .acknowledgedZoneIDsByScope[
+                    .sharedDatabase
+                ]?.isEmpty ?? true
+        )
+    }
+
+    @MainActor
+    func testLateShareAcceptanceIsRequeuedAcrossAccountChange() async throws {
+        let rootURL = makeTempDirectory()
+        let snapshotDate =
+            fixtureDate("2026-07-23T11:56:50Z")
+        let acceptedDescriptor = RepositoryDescriptor(
+            zoneName: "late-share-zone",
+            zoneOwnerName: "_late_share_owner_",
+            shareRecordName: "late-share-record",
+            role: .viewer
+        )
+        let acceptedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Accepted on account A",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.acceptedSharedRepository =
+            AcceptedSharedRepository(
+                descriptor: acceptedDescriptor,
+                snapshot: acceptedSnapshot,
+                displayName: "Late Share",
+                recordChangeTag: "accepted-tag"
+            )
+        let store = try makeStore(
+            now: snapshotDate,
+            entries: [],
+            rootURL: rootURL,
+            cloudService: cloudService,
+            preferences: AppPreferences(
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        await store.loadIfNeeded()
+
+        let shareURL = try XCTUnwrap(
+            URL(
+                string:
+                    "https://www.icloud.com/share/late-account-share"
+            )
+        )
+        store.incomingShareLink = shareURL.absoluteString
+        cloudService.pauseAcceptShare = true
+        let acceptanceStarted = expectation(
+            description: "account A share acceptance is in flight"
+        )
+        cloudService.acceptShareStartedExpectation =
+            acceptanceStarted
+        let acceptanceTask = Task {
+            await store.acceptIncomingShareLink()
+        }
+        await fulfillment(
+            of: [acceptanceStarted],
+            timeout: 2
+        )
+        cloudService.acceptShareStartedExpectation = nil
+
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-b")
+        await store.handleCloudAccountChange()
+        cloudService.resumePausedAcceptShare()
+        await acceptanceTask.value
+
+        XCTAssertEqual(
+            store.currentRepositoryID,
+            RepositoryReference.localRepositoryID
+        )
+        XCTAssertFalse(
+            store.sortedRepositories.contains {
+                $0.id ==
+                    acceptedDescriptor.storageIdentifier
+            }
+        )
+        XCTAssertEqual(cloudService.acceptedShareURLs, [shareURL])
+
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        await store.handleCloudAccountChange()
+
+        XCTAssertEqual(
+            cloudService.acceptedShareURLs,
+            [shareURL, shareURL]
+        )
+        XCTAssertEqual(
+            store.currentRepositoryID,
+            acceptedDescriptor.storageIdentifier
+        )
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Accepted on account A"]
+        )
+    }
+
+    @MainActor
+    func testStaleTransitionResetCannotUnquarantineDifferentAccount() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "stale-reset-zone",
+            zoneOwnerName: "_stale_reset_owner_",
+            shareRecordName: "stale-reset-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate =
+            fixtureDate("2026-07-23T11:56:55Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Before stale reset",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Stale Reset",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: initialSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = initialSnapshot
+        cloudService.metadataRecordChangeTag = "tag-a"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+        await store.loadIfNeeded()
+        cloudService.savedSnapshots.removeAll()
+
+        cloudService.pauseResetRemoteChangeTracking = true
+        let resetStarted = expectation(
+            description: "account A tracking reset is in flight"
+        )
+        cloudService
+            .resetRemoteChangeTrackingStartedExpectation =
+            resetStarted
+        let firstTransition = Task {
+            await store.handleCloudAccountChange()
+        }
+        await fulfillment(of: [resetStarted], timeout: 2)
+        cloudService
+            .resetRemoteChangeTrackingStartedExpectation = nil
+
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-b")
+        await store.handleCloudAccountChange()
+
+        let didSave = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: "Must stay quarantined",
+                body:
+                    "A stale reset may not upload this to account B.",
+                happenedAt: snapshotDate
+            ),
+            importedImageData: nil
+        )
+        XCTAssertTrue(didSave)
+        cloudService.resumePausedResetRemoteChangeTracking()
+        await firstTransition.value
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(cloudService.savedSnapshots.isEmpty)
+        XCTAssertNotNil(
+            try CloudUploadOutboxStore(
+                repositoryRootURL: libraryStore
+                    .repositoryStore(for: repositoryID)
+                    .rootURL
+            ).load()
+        )
+    }
+
+    @MainActor
+    func testUpgradeWithoutStoredAccountIdentityRequiresExplicitConfirmation() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "identity-migration-zone",
+            zoneOwnerName: CKCurrentUserDefaultName,
+            shareRecordName: "identity-migration-share",
+            role: .owner
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate =
+            fixtureDate("2026-07-23T11:56:58Z")
+        let localSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Existing account A journal",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Identity Migration",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "account-a-tag"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: localSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID
+            )
+        )
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        try outboxStore.save(
+            CloudUploadOutboxRecord(
+                repositoryID: repositoryID,
+                descriptor: descriptor,
+                displayName: reference.displayName,
+                snapshot: localSnapshot,
+                generation: 1,
+                baseRecordChangeTag: "account-a-tag",
+                baseSnapshot: localSnapshot,
+                createdAt: snapshotDate
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService
+            .requiresExplicitAccountIdentityMigrationConfirmation =
+            true
+        cloudService.accountAvailability =
+            .available(userRecordName: "possibly-account-b")
+        cloudService.loadedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Different account B content",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        cloudService.metadataRecordChangeTag = "account-b-tag"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+
+        await store.loadIfNeeded()
+
+        XCTAssertTrue(
+            store
+                .isCloudAccountMigrationConfirmationPresented
+        )
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Existing account A journal"]
+        )
+        XCTAssertTrue(cloudService.savedSnapshots.isEmpty)
+        XCTAssertTrue(
+            cloudService.loadedMetadataDescriptors.isEmpty
+        )
+        XCTAssertNil(
+            try libraryStore.loadPreferences()
+                .cloudAccountUserRecordName
+        )
+        XCTAssertNotNil(try outboxStore.load())
+    }
+
+    @MainActor
+    func testColdLaunchShareDeliveryPreservesExistingCatalogUntilIdentityConfirmation() async throws {
+        let rootURL = makeTempDirectory()
+        let snapshotDate =
+            fixtureDate("2026-07-23T11:56:59Z")
+        let existingDescriptor = RepositoryDescriptor(
+            zoneName: "existing-catalog-zone",
+            zoneOwnerName: "_existing_catalog_owner_",
+            shareRecordName: "existing-catalog-share",
+            role: .viewer
+        )
+        let existingSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Existing catalog journal",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let existingReference = RepositoryReference(
+            id: existingDescriptor.storageIdentifier,
+            displayName: "Existing Catalog",
+            descriptor: existingDescriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "existing-tag"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [existingReference],
+            snapshotsByRepositoryID: [
+                existingReference.id: existingSnapshot
+            ],
+            preferences: AppPreferences()
+        )
+        let acceptedDescriptor = RepositoryDescriptor(
+            zoneName: "cold-share-zone",
+            zoneOwnerName: "_cold_share_owner_",
+            shareRecordName: "cold-share-record",
+            role: .viewer
+        )
+        let acceptedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Cold delivered share",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService
+            .requiresExplicitAccountIdentityMigrationConfirmation =
+            true
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.acceptedSharedRepository =
+            AcceptedSharedRepository(
+                descriptor: acceptedDescriptor,
+                snapshot: acceptedSnapshot,
+                displayName: "Cold Share",
+                recordChangeTag: "accepted-tag"
+            )
+        cloudService.loadedSnapshotsByRepositoryID = [
+            existingReference.id: existingSnapshot,
+            acceptedDescriptor.storageIdentifier:
+                acceptedSnapshot
+        ]
+        cloudService.metadataRecordChangeTag = "existing-tag"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+        let metadata = try makeShareMetadata()
+
+        // Deliberately deliver the system share before ContentView's
+        // loadIfNeeded task, matching the unordered cold-launch SwiftUI tasks.
+        await store.acceptShare(metadata: metadata)
+
+        XCTAssertEqual(
+            cloudService.acceptedShareMetadataCount,
+            0
+        )
+        XCTAssertTrue(
+            store
+                .isCloudAccountMigrationConfirmationPresented
+        )
+        XCTAssertEqual(
+            Set(try libraryStore.loadCatalog().map(\.id)),
+            Set([
+                RepositoryReference.localRepositoryID,
+                existingReference.id
+            ])
+        )
+        XCTAssertEqual(
+            try libraryStore.repositoryStore(
+                for: existingReference.id
+            ).loadSnapshot()?.entries.map(\.title),
+            ["Existing catalog journal"]
+        )
+
+        await store
+            .confirmCurrentICloudAccountForMigration()
+
+        XCTAssertEqual(
+            cloudService.acceptedShareMetadataCount,
             1
         )
-        let reconstructedReference = try XCTUnwrap(
-            libraryStore.loadCatalog().first(where: { $0.id == repositoryID })
-        )
-        XCTAssertEqual(reconstructedReference.pendingCloudUploadGeneration, 1)
         XCTAssertEqual(
-            reconstructedReference.pendingCloudUploadBaseChangeTag,
-            "persisted-baseline-tag"
+            Set(try libraryStore.loadCatalog().map(\.id)),
+            Set([
+                RepositoryReference.localRepositoryID,
+                existingReference.id,
+                acceptedDescriptor.storageIdentifier
+            ])
         )
         XCTAssertEqual(
-            reconstructedReference.cloudUploadConflictServerChangeTag,
-            "newer-server-tag"
+            store.currentRepositoryID,
+            acceptedDescriptor.storageIdentifier
         )
-        XCTAssertNotNil(reconstructedReference.cloudUploadConflictDetectedAt)
+    }
+
+    @MainActor
+    func testDifferentICloudAccountQuarantinesNewEditsUntilOriginalAccountReturns() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "account-quarantine-zone",
+            zoneOwnerName: "_account_quarantine_owner_",
+            shareRecordName: "account-quarantine-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate = fixtureDate("2026-07-23T11:57:00Z")
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Original account cache",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Account Quarantine",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: initialSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = initialSnapshot
+        cloudService.metadataRecordChangeTag = "tag-a"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { snapshotDate }
+        )
+        await store.loadIfNeeded()
+        cloudService.savedSnapshots.removeAll()
+
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-b")
+        await store.handleCloudAccountChange()
+        XCTAssertEqual(
+            cloudService.resetRemoteChangeTrackingCount,
+            0
+        )
+
+        let didSave = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: "Local edit while wrong account is active",
+                body: "Never upload this into account B.",
+                happenedAt: snapshotDate
+            ),
+            importedImageData: nil
+        )
+        XCTAssertTrue(didSave)
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        XCTAssertTrue(cloudService.savedSnapshots.isEmpty)
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        let quarantinedOutbox = try XCTUnwrap(
+            outboxStore.load()
+        )
+
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.savedRecordChangeTag = "tag-c"
+        cloudService.metadataRecordChangeTag = "tag-c"
+        let uploadCompleted = expectation(
+            description:
+                "original account resumes quarantined upload"
+        )
+        cloudService.saveSnapshotFinishedExpectation =
+            uploadCompleted
+        await store.handleCloudAccountChange()
+        await fulfillment(of: [uploadCompleted], timeout: 2)
+
+        XCTAssertEqual(
+            cloudService.resetRemoteChangeTrackingCount,
+            1
+        )
+        XCTAssertEqual(cloudService.savedSnapshots.count, 1)
+        XCTAssertEqual(
+            cloudService.savedSnapshots.first?
+                .cloudUploadOperationID,
+            quarantinedOutbox.operationID
+        )
+        XCTAssertNil(try outboxStore.load())
+    }
+
+    @MainActor
+    func testAccountLookupFailureCancelsStaleWriterThenRetriesFullTransitionRecovery() async throws {
+        let rootURL = makeTempDirectory()
+        let descriptor = RepositoryDescriptor(
+            zoneName: "account-retry-zone",
+            zoneOwnerName: "_account_retry_owner_",
+            shareRecordName: "account-retry-share",
+            role: .editor
+        )
+        let repositoryID = descriptor.storageIdentifier
+        let snapshotDate = fixtureDate("2026-07-23T11:58:00Z")
+        var currentDate = snapshotDate
+        let initialSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Before account notification",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let reference = RepositoryReference(
+            id: repositoryID,
+            displayName: "Account Retry",
+            descriptor: descriptor,
+            source: .shared,
+            lastKnownSnapshotUpdatedAt: snapshotDate,
+            lastKnownServerRecordChangeTag: "tag-a"
+        )
+        let libraryStore = try makeCloudBackedLibrary(
+            rootURL: rootURL,
+            references: [reference],
+            snapshotsByRepositoryID: [
+                repositoryID: initialSnapshot
+            ],
+            preferences: AppPreferences(
+                defaultRepositoryID: repositoryID,
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let retrySleeper = ControlledSharedCloudRetrySleeper()
+        var scheduledBackgroundDeadlines: [Date] = []
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.loadedSnapshot = initialSnapshot
+        cloudService.metadataRecordChangeTag = "tag-a"
+        cloudService.savedRecordChangeTag = "tag-b"
+        let store = AppStore(
+            libraryStore: libraryStore,
+            cloudService: cloudService,
+            now: { currentDate },
+            sleepUntilSharedCloudRetry: { deadline in
+                await retrySleeper.sleep(until: deadline)
+            },
+            scheduleBackgroundRefreshAfter: { deadline in
+                scheduledBackgroundDeadlines.append(deadline)
+            }
+        )
+        await store.loadIfNeeded()
+        cloudService.ensuredSubscriptionDescriptors.removeAll()
+
+        let staleUploadStarted = expectation(
+            description: "old-account writer is in flight"
+        )
+        cloudService.pauseSaveSnapshot = true
+        cloudService.saveSnapshotStartedExpectation =
+            staleUploadStarted
+        let didSave = await store.saveEntry(
+            draft: EntryDraft(
+                kind: .journal,
+                title: "Durable through account lookup failure",
+                body: "The late response must not clear this outbox.",
+                happenedAt: snapshotDate
+            ),
+            importedImageData: nil
+        )
+        XCTAssertTrue(didSave)
+        await fulfillment(of: [staleUploadStarted], timeout: 2)
+        cloudService.saveSnapshotStartedExpectation = nil
+        let outboxStore = CloudUploadOutboxStore(
+            repositoryRootURL: libraryStore
+                .repositoryStore(for: repositoryID)
+                .rootURL
+        )
+        let pendingOutbox = try XCTUnwrap(
+            outboxStore.load()
+        )
+
+        cloudService.accountAvailabilityError =
+            SimulatedAccountLookupError.failed
+        let accountChangeTask = Task {
+            await store.handleCloudAccountChange()
+        }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        XCTAssertEqual(
+            cloudService.accountAvailabilityRequestCount,
+            1,
+            "The handler must drain the writer before starting account lookup."
+        )
+        cloudService.resumePausedSaveSnapshot()
+        await accountChangeTask.value
+
+        XCTAssertEqual(cloudService.savedSnapshots.count, 1)
+        XCTAssertEqual(
+            try outboxStore.load()?.operationID,
+            pendingOutbox.operationID
+        )
+        XCTAssertEqual(
+            try libraryStore.loadCatalog().first {
+                $0.id == repositoryID
+            }?.pendingCloudUploadGeneration,
+            pendingOutbox.generation
+        )
+        XCTAssertEqual(
+            cloudService.resetRemoteChangeTrackingCount,
+            0
+        )
+
+        for _ in 0..<100 {
+            if !(await retrySleeper.deadlines()).isEmpty {
+                break
+            }
+            await Task.yield()
+        }
+        let retryDeadline = snapshotDate.addingTimeInterval(60)
+        let recordedRetryDeadlines =
+            await retrySleeper.deadlines()
+        XCTAssertEqual(
+            recordedRetryDeadlines,
+            [retryDeadline]
+        )
+        XCTAssertEqual(
+            scheduledBackgroundDeadlines,
+            [retryDeadline]
+        )
+
+        cloudService.accountAvailabilityError = nil
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.metadataRecordChangeTag = "tag-b"
+        let recoveredUploadFinished = expectation(
+            description:
+                "account retry resets tracking and resumes upload"
+        )
+        cloudService.saveSnapshotFinishedExpectation =
+            recoveredUploadFinished
+        currentDate = retryDeadline
+        await retrySleeper.resume()
+        await fulfillment(
+            of: [recoveredUploadFinished],
+            timeout: 2
+        )
+        cloudService.saveSnapshotFinishedExpectation = nil
+
+        XCTAssertEqual(
+            cloudService.resetRemoteChangeTrackingCount,
+            1
+        )
+        XCTAssertEqual(
+            cloudService.savedSnapshots.count,
+            2
+        )
+        XCTAssertEqual(
+            cloudService.savedSnapshots.last?
+                .cloudUploadOperationID,
+            pendingOutbox.operationID
+        )
+        XCTAssertEqual(
+            cloudService.ensuredSubscriptionDescriptors,
+            [descriptor]
+        )
+        XCTAssertNil(try outboxStore.load())
+    }
+
+    @MainActor
+    func testIncomingShareWaitsForVerifiedICloudIdentity() async throws {
+        let rootURL = makeTempDirectory()
+        let snapshotDate = fixtureDate("2026-07-23T11:59:00Z")
+        let acceptedDescriptor = RepositoryDescriptor(
+            zoneName: "deferred-share-zone",
+            zoneOwnerName: "_deferred_share_owner_",
+            shareRecordName: "deferred-share-record",
+            role: .viewer
+        )
+        let acceptedSnapshot = RepositorySnapshot(
+            entries: [
+                makeEntry(
+                    title: "Accepted only after verification",
+                    happenedAt: snapshotDate
+                )
+            ],
+            updatedAt: snapshotDate
+        )
+        let cloudService = MockCloudRepositoryService()
+        cloudService.accountAvailability =
+            .available(userRecordName: "account-a")
+        cloudService.pauseAccountAvailability = true
+        cloudService.accountAvailabilityStartedExpectation =
+            expectation(
+                description: "account verification pauses"
+            )
+        cloudService.acceptedSharedRepository =
+            AcceptedSharedRepository(
+                descriptor: acceptedDescriptor,
+                snapshot: acceptedSnapshot,
+                displayName: "Deferred Share",
+                recordChangeTag: "accepted-tag"
+            )
+        let store = try makeStore(
+            now: snapshotDate,
+            entries: [],
+            rootURL: rootURL,
+            cloudService: cloudService,
+            preferences: AppPreferences(
+                cloudAccountUserRecordName: "account-a"
+            )
+        )
+        let metadata = try makeShareMetadata()
+        let loadTask = Task {
+            await store.loadIfNeeded()
+        }
+        await fulfillment(
+            of: [
+                try XCTUnwrap(
+                    cloudService
+                        .accountAvailabilityStartedExpectation
+                )
+            ],
+            timeout: 2
+        )
+
+        await store.acceptShare(metadata: metadata)
+        XCTAssertEqual(
+            cloudService.acceptedShareMetadataCount,
+            0
+        )
+
+        cloudService.resumePausedAccountAvailability()
+        await loadTask.value
+
+        XCTAssertEqual(
+            cloudService.acceptedShareMetadataCount,
+            1
+        )
+        XCTAssertEqual(
+            store.currentRepositoryID,
+            acceptedDescriptor.storageIdentifier
+        )
+        XCTAssertEqual(
+            store.entries.map(\.title),
+            ["Accepted only after verification"]
+        )
     }
 
     @MainActor
@@ -2270,6 +3824,10 @@ private enum SimulatedSubscriptionRepairError: Error {
 }
 
 private enum SimulatedDownloadError: Error {
+    case failed
+}
+
+private enum SimulatedAccountLookupError: Error {
     case failed
 }
 

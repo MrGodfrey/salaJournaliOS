@@ -16,6 +16,11 @@ nonisolated struct SavedRepositorySnapshot: Equatable, Sendable {
     var recordChangeTag: String?
 }
 
+nonisolated struct LoadedRepositorySnapshot: Equatable, Sendable {
+    var snapshot: RepositorySnapshot
+    var metadata: RepositorySnapshotMetadata
+}
+
 nonisolated struct CloudImageMutationPlan: Equatable, Sendable {
     var assetsToSave: [RepositoryImageAsset]
     var referencesToInspectBeforeSave: [String]
@@ -52,18 +57,31 @@ nonisolated struct CloudRepositoryDatabaseChanges: Equatable, Sendable {
     var deletedZones: Set<CloudRepositoryZoneDeletion> = []
 }
 
+nonisolated enum CloudAccountAvailability: Equatable, Sendable {
+    case available(userRecordName: String)
+    case temporarilyUnavailable
+    case unavailable
+}
+
 nonisolated struct CloudSubscriptionRepairPlan: Sendable {
     var subscriptionToSave: CKSubscription?
     var subscriptionIDsToDelete: [CKSubscription.ID]
 }
 
 protocol CloudRepositoryServicing {
+    var requiresExplicitAccountIdentityMigrationConfirmation:
+        Bool { get }
+
     func loadSnapshotMetadata(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshotMetadata
     func loadSnapshot(using descriptor: RepositoryDescriptor) async throws -> RepositorySnapshot
     func loadSnapshot(
         using descriptor: RepositoryDescriptor,
         availableImageContentHashes: [String: String]
     ) async throws -> RepositorySnapshot
+    func loadSnapshotWithMetadata(
+        using descriptor: RepositoryDescriptor,
+        availableImageContentHashes: [String: String]
+    ) async throws -> LoadedRepositorySnapshot
     func saveSnapshot(
         _ snapshot: RepositorySnapshot,
         using descriptor: RepositoryDescriptor,
@@ -79,6 +97,8 @@ protocol CloudRepositoryServicing {
     func ensureRepositorySubscriptions(
         using descriptors: [RepositoryDescriptor]
     ) async throws
+    func cloudAccountAvailability() async throws
+        -> CloudAccountAvailability
     func pendingRepositoryZoneChanges(
         in scope: CloudDatabaseScope
     ) async throws -> CloudRepositoryDatabaseChanges
@@ -98,11 +118,32 @@ protocol CloudRepositoryServicing {
 }
 
 extension CloudRepositoryServicing {
+    var requiresExplicitAccountIdentityMigrationConfirmation:
+        Bool {
+        true
+    }
+
     func loadSnapshot(
         using descriptor: RepositoryDescriptor,
         availableImageContentHashes: [String: String]
     ) async throws -> RepositorySnapshot {
         try await loadSnapshot(using: descriptor)
+    }
+
+    func loadSnapshotWithMetadata(
+        using descriptor: RepositoryDescriptor,
+        availableImageContentHashes: [String: String]
+    ) async throws -> LoadedRepositorySnapshot {
+        let snapshot = try await loadSnapshot(
+            using: descriptor,
+            availableImageContentHashes:
+                availableImageContentHashes
+        )
+        let metadata = try await loadSnapshotMetadata(using: descriptor)
+        return LoadedRepositorySnapshot(
+            snapshot: snapshot,
+            metadata: metadata
+        )
     }
 
     func ensureRepositorySubscriptions(
@@ -111,6 +152,11 @@ extension CloudRepositoryServicing {
         for descriptor in descriptors {
             try await ensureRepositorySubscription(using: descriptor)
         }
+    }
+
+    func cloudAccountAvailability() async throws
+        -> CloudAccountAvailability {
+        .available(userRecordName: "default-cloud-account")
     }
 }
 
@@ -200,6 +246,23 @@ final class CloudRepositoryService: CloudRepositoryServicing {
             changeTokenStore = CloudChangeTokenStore(directoryURL: changeTokenStoreURL)
         } else {
             changeTokenStore = nil
+        }
+    }
+
+    func cloudAccountAvailability() async throws
+        -> CloudAccountAvailability {
+        switch try await container.accountStatus() {
+        case .available:
+            let userRecordID = try await container.userRecordID()
+            return .available(
+                userRecordName: userRecordID.recordName
+            )
+        case .temporarilyUnavailable, .couldNotDetermine:
+            return .temporarilyUnavailable
+        case .noAccount, .restricted:
+            return .unavailable
+        @unknown default:
+            return .temporarilyUnavailable
         }
     }
 
@@ -360,13 +423,10 @@ final class CloudRepositoryService: CloudRepositoryServicing {
         ).snapshot
     }
 
-    private func loadSnapshotWithMetadata(
+    func loadSnapshotWithMetadata(
         using descriptor: RepositoryDescriptor,
         availableImageContentHashes: [String: String] = [:]
-    ) async throws -> (
-        snapshot: RepositorySnapshot,
-        metadata: RepositorySnapshotMetadata
-    ) {
+    ) async throws -> LoadedRepositorySnapshot {
         guard let zoneID = descriptor.zoneID else {
             throw CloudRepositoryError.repositoryDescriptorMissing
         }
@@ -421,7 +481,10 @@ final class CloudRepositoryService: CloudRepositoryServicing {
             serverModifiedAt: record.modificationDate,
             recordChangeTag: record.recordChangeTag
         )
-        return (hydratedSnapshot, metadata)
+        return LoadedRepositorySnapshot(
+            snapshot: hydratedSnapshot,
+            metadata: metadata
+        )
     }
 
     func saveSnapshot(

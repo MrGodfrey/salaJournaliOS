@@ -131,7 +131,9 @@ final class CloudUploadOperationChainTests: AppStoreTestCase {
         let operationID = outbox.operationID
         let snapshotOperationID = outbox.snapshot.cloudUploadOperationID
 
-        outbox.advanceBaseRecordChangeTag("server-acknowledged-baseline")
+        try outbox.advanceBaseRecordChangeTag(
+            "server-acknowledged-baseline"
+        )
 
         XCTAssertEqual(
             outbox.baseRecordChangeTag,

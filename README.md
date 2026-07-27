@@ -83,7 +83,7 @@
 | 一台设备上可能有多座仓库 | 支持本地仓库、共享仓库、默认仓库切换和最近打开排序 |
 | 想备份、迁移或恢复数据 | 支持当前仓库导出 ZIP、导入 ZIP、清空当前仓库 |
 | 跨时区使用时需要稳定的日期归属 | 文章时间戳始终以 ISO 8601 / UTC 绝对时间保存；日期显示、Journal 归属和 Calendar 打点默认跟随系统时区，也可固定为北京时间，选择会持久保存 |
-| 共享仓库变化后想及时知道 | CloudKit 静默推送会直接在系统给出的后台时段内定位发生变化的 zone、拉取新快照，并在真正完成后向 iOS 汇报结果；另有持久化 change token / 待处理 zone 收件箱、应用启动 / 回到前台追赶和低频 `BGAppRefreshTask` 增量兜底。可见提醒权限与同步本身已经解耦：关闭提醒不会关闭后台同步。订阅注册使用 production 已验证的 stable 配置并执行 save-only 自愈：升级、订阅缺失或配置异常时会补建并读回验证，绝不会在替代订阅确认前删除工作订阅；private / shared database 每轮最多各校验一次，成功后七天内不重复请求。共享仓库编辑先本地落盘，待上传状态会跨进程保留并自动补传；上传使用服务端 change tag 防止覆盖别人刚写好的内容；CloudKit 返回 retry-after 时会持久化冷却时间，避免连续请求 |
+| 共享仓库变化后想及时知道 | CloudKit 静默推送会直接在系统给出的后台时段内定位发生变化的 zone、拉取新快照，并在真正完成后向 iOS 汇报结果；另有持久化 change token / 待处理 zone 收件箱、应用启动 / 回到前台追赶和低频 `BGAppRefreshTask` 增量兜底。可见提醒权限与同步本身已经解耦：关闭提醒不会关闭后台同步。订阅注册使用 production 已验证的 stable 配置并执行 save-only 自愈：升级、订阅缺失或配置异常时会补建并读回验证，绝不会在替代订阅确认前删除工作订阅；private / shared database 每轮最多各校验一次，成功后七天内不重复请求。共享仓库编辑先本地落盘，待上传状态会跨进程保留并自动补传；账户身份未确认时会先隔离所有云端读写但立即展示本地缓存，确认仍是同一 iCloud 用户后才恢复；上传使用服务端 change tag 防止覆盖别人刚写好的内容，遇到并发更新会按持久化基线做无损三方合并；CloudKit 返回 retry-after 时会持久化冷却时间，避免连续请求 |
 | 共享仓库里的图片也要跟着走 | 共享快照会同步正文和本地图片，图片在 CloudKit 中独立保存；根快照记录每张图的 SHA-256，文字修改不会重新读写未变化图片，新增 / 替换 / 删除图片则与根记录原子提交。拉取只复用哈希一致的本地缓存，并兼容旧版同名图片被原地替换的情况 |
 | 插图不能无限膨胀 | 选图后会自动压缩并保证单张图片保存到 `100KB` 以下 |
 
@@ -111,7 +111,7 @@
 - CloudKit 共享、订阅和分享链接接受，依赖设备登录 iCloud 且容器配置正确
 - 首次把共享能力带到 TestFlight / App Store 对应的 CloudKit production 环境时，必须先把 development schema 部署到 production；当前项目至少需要 `RepositoryRoot` 和 `RepositoryImageAsset` 记录类型，否则生成邀请或同步图片时可能报 `Cannot create new type ... in production schema`
 - iOS 的静默后台推送和 `BGAppRefreshTask` 都是系统按电量、使用习惯、网络和后台刷新设置调度的 best-effort 机制，不是实时任务调度器；用户主动从多任务界面强制退出应用后，系统不会再通过静默推送唤醒它，直到用户重新打开。应用能保证的是持久化记录进度并在下一次获准运行时追到最新内容，不能保证每一次 CloudKit 变化都对应一条独立、即时到达的通知
-- 如果本地待上传内容与另一台设备的新版本发生并发冲突，应用会保留本地快照和待上传任务并暂停自动覆盖，同时提示用户；当前版本不会静默选择一方或自动做可能破坏删除语义的整仓库合并
+- 如果本地待上传内容与另一台设备的新版本发生并发冲突，普通共享编辑会用待上传文件中保存的共同基线做方向明确的三方合并：远端版本保留原条目 UUID，同一条目被双方分别修改时把本地版本保留为确定性的冲突副本，互不相关的新增和编辑直接合并，删除只在另一端仍未修改时生效；旧版 outbox 缺少共同基线时采用保守无损 union。合并后仍以最新服务端 change tag 原子保存，不会静默覆盖另一端内容。首次分享和 encrypted-data-reset 继续走各自的严格恢复路径，不参与普通合并
 - 如果共享被撤销或 CloudKit zone 被普通删除，设备会保留最后一次成功同步的只读缓存，并把仓库状态显示为 `Unavailable · Cached Read-Only`，不再反复请求已经不存在的 zone；如果 CloudKit 报告 `purged`，应用会按 Apple 语义删除该 zone 的本地缓存
 - 仓库根目录里虽然保留了 `lumina/` 前端原型目录，但当前 iOS App 的正式实现不依赖它
 
@@ -125,7 +125,9 @@
 - 当前 UI 文案、日期标题、月份/星期名称和系统权限提示支持英文与简体中文，默认跟随系统语言
 - 日期显示、文章按天归类和编辑器日期选择默认跟随系统时区；可在设置页底部切换为北京时间，应用会一直保留上次选择
 - 如果启用了生物识别解锁，应用打开或从后台回到前台时会先要求验证；Face ID / Touch ID 失败或被锁定时可回退到系统锁屏密码；启动时会先显示验证，再在解锁成功后静默同步共享仓库
-- 应用启动后会立即检查已接入共享仓库的最新快照；刷新先比较 CloudKit 服务端 `recordChangeTag`，旧数据没有该字段时才回退到 `updatedAt` / `entryCount`，因此不会再因两台设备时钟偏差漏掉内容变化
+- 应用启动时会先从本地 catalog / cache 立即恢复界面，再确认当前 CloudKit 用户身份；身份仍相同时才恢复待上传和远端追赶，暂时不可用时保留缓存与 outbox 并按退避时间重试，确认换成其他 iCloud 用户时继续隔离写入并提示用户，避免把旧账号的待上传日记传到新账号
+- 从没有保存账户身份的旧版本升级到 `1.2.11` 时，只要本机已有云仓库或待上传内容，就会出现一次 `Confirm iCloud Account`：只有用户明确确认当前仍是原账号、且稳定用户标识成功写入 `preferences.json` 后，CloudKit 读写才会解锁；选择 `Keep Sync Paused` 不会删除缓存或 outbox
+- 账户确认后会立即检查已接入共享仓库的最新快照；刷新先比较 CloudKit 服务端 `recordChangeTag`，旧数据没有该字段时才回退到 `updatedAt` / `entryCount`，因此不会再因两台设备时钟偏差漏掉内容变化
 - 回到前台会在距离上次成功同步超过 `30` 秒时追赶一次；短时间反复切换前后台会被去抖，避免制造无意义 CloudKit 请求
 - iOS 在后台交付 CloudKit 静默推送时，应用会直接完成同步并按真实结果返回 `newData / noData / failed`；如果检测到可见内容变化且用户开启了提醒，会显示本地通知并把角标置为 `1`。应用进入前台后角标立刻清零
 - `1.2.10` 会强制重新验证并修复 `1.2.9` 的 CloudKit 订阅迁移状态：共享成员恢复 production 已验证的全 shared database 订阅，仓库所有者恢复逐 zone 订阅；修复只保存和读回验证，不删除任何现存订阅。APNs 注册会在应用再次激活时重试，订阅、推送处理、上传和本地提醒失败会写入统一的 `CloudSync` 系统日志
@@ -293,9 +295,9 @@ Application Support/thatDay/
 
 这套结构由 `RepositoryLibraryStore` 管理，它还负责把旧版“根目录单仓库”数据自动迁移到 `repositories/local/`。
 
-`pending-cloud-upload.json` 会在 CloudKit owner / editor 仓库存在待提交内容或待完成回执时出现；本地仓库第一次发起共享时，也会先以 `prepareShare` 模式写入同一份 durable outbox。成功提交并把服务端基线写回 catalog 后会移除；`encryptedDataReset` 恢复回执会保留到对应删除事件已确认，避免确认失败后重复重建。
+`pending-cloud-upload.json` 会在 CloudKit owner / editor 仓库存在待提交内容或待完成回执时出现；本地仓库第一次发起共享时，也会先以 `prepareShare` 模式写入同一份 durable outbox。当前 v3 格式除待上传快照、图片和 operation chain 外，还保存不内嵌图片的共同基线快照、精确时间位模式、内容摘要与图片哈希清单，用于重启后的三方合并和完整性校验；旧版 v2 的 ISO 8601 日期、legacy SHA-256 摘要和无基线格式会兼容读取，并在下一代写入时迁移。成功提交并把服务端基线写回 catalog 后会移除；`encryptedDataReset` 恢复回执会保留到对应删除事件已确认，避免确认失败后重复重建。
 
-`preferences.json` 保存设备端的应用时区选择、最近一次成功云同步时间和 CloudKit retry-after 截止时间；旧版偏好缺少这些字段时会使用兼容默认值。它不属于仓库快照，因此不会通过 CloudKit 强制其他共享成员使用同一时区。
+`preferences.json` 保存设备端的应用时区选择、最近一次成功云同步时间、CloudKit retry-after 截止时间和上一次确认的 CloudKit 用户记录标识；旧版偏好缺少普通字段时使用兼容默认值，缺少账户标识且已有云数据时则 fail-closed 等待一次明确确认。它不属于仓库快照，因此不会通过 CloudKit 强制其他共享成员使用同一时区。
 
 `repository.json` 现在除了文章数组，也会保存仓库级 Blog 标签配置，以及每篇 Blog 的图片卡片布局，因此标签顺序、增删结果、文章标签和横版 / 竖版显示方式都会跟随本地持久化、共享快照和 ZIP 导入导出一起移动。
 
@@ -328,6 +330,8 @@ Application Support/thatDay/
 - `AppEventBridge.swift` 里的 `RepositoryRemoteChangeCenter` / `NotificationRouteCenter` 负责把系统事件桥接回 `AppStore`
 - `AppStore` 负责按启动 / 前台 / 推送 / 系统后台恢复 / 手动五类触发刷新共享仓库、比对快照差异、生成本地通知和应用角标，以及在点击通知后切换到对应仓库和文章；手动下拉只检查当前共享仓库
 - shared database 使用一份稳定、不过滤记录类型的 `CKDatabaseSubscription`；每座 private owner 仓库使用稳定的逐 zone `CKRecordZoneSubscription`。`1.2.10` 修复时只补建或纠正稳定订阅、保存后按 ID 读回确认，绝不在同一迁移里删除旧订阅，因此即使某次保存失败也不会再次形成“新旧订阅同时不存在”的漏推窗口。订阅状态会在本地记忆并以七天为周期校验；同一轮 private / shared database 各批量盘点一次，发生修复时额外批量读回一次。普通失败在本次进程内不反复重试，CloudKit 返回 retry-after 时则严格等到冷却到期
+- `CKAccountChanged` 到达后会先隔离并等待当前账户的下载刷新、reset reconciliation 和所有上传者停稳，再查询账户状态和稳定用户标识；每一次异步读写、分享接受和 transition reset 都携带账户 epoch，旧账户请求晚回时无权覆盖缓存、确认 change token 或重新解除隔离。相同账户恢复时会重置 change token、重新验证订阅并追赶，临时不可用或查询失败时保留全部 outbox 并指数退避，真实换账号时保持隔离
+- 账户未确认期间收到的分享链接 / metadata 会先排队，确认后再处理；冷启动时即使系统分享或通知深链任务先于 `ContentView.loadIfNeeded` 执行，也会先加载磁盘 catalog 并完成账户闸门，不会用初始空 catalog 覆盖已有仓库，也不会丢掉通知目标
 - 数据库推送到达后先用持久化 `CKServerChangeToken` 读取发生变化的 zone，只刷新这些仓库；新 token 和待处理 zone 会先原子落入本地收件箱，只有仓库快照成功保存后才确认对应 zone，因此下载失败或进程中止不会永久漏掉这次 invalidation
 - 三类 zone 删除原因分别处理：普通 `deleted`（包括共享被撤销）保留最后一份缓存并标成不可用只读；`purged` 会先把禁止补传的 tombstone 写入 catalog，再按 Apple 语义幂等删除本地缓存，即使清理中途终止也不会在重启时重建 outbox；`encryptedDataReset` 会让 owner 从持久化 outbox 或完整本地快照重建 private zone，共享参与者则保留无权重建的只读缓存。重建回执及其后续编辑代际会一直保留恢复模式，直到对应 change-token 删除事件确认成功；如果本地快照或其中任何图片缺失，恢复会失败并保留事件等待重试，绝不上传空仓库或不完整快照
 - 远端推送回调不再只把事件塞进前台队列并提前返回，而是在 iOS 提供的后台执行窗口里真正完成同步，再把真实结果交回系统
@@ -335,11 +339,11 @@ Application Support/thatDay/
 - 定向 zone 推送、单仓库手动刷新不会重置“完整前台巡检”的去抖时间；因此某座仓库刚被推送刷新，也不会让另一座漏掉推送的仓库在应用打开时继续等待
 - 快照是否变化优先使用 CloudKit 服务端 `recordChangeTag`，不再把客户端 `updatedAt` 当作跨设备权威时钟；这可以覆盖“时间戳和条目数相同但正文已变”的情况
 - 如果 CloudKit 返回 retry-after，例如 `requestRateLimited`、`serviceUnavailable` 或嵌套在 partial failure 里的限流错误，应用会把冷却截止时间写入 `preferences.json`；同一批多仓库 / 多订阅处理会立即停止后续请求，冷却期间自动同步和待上传补传都会跳过，后台兜底不会把这次跳过误记成成功刷新。应用在前台时会按这个绝对截止时间安排单个可取消唤醒，到期自动补传和追赶；后台 request 的 earliest date 也不会早于更长的冷却时间，避免重启或多仓库循环绕过限流形成 retry storm
-- 共享仓库保存使用本地优先策略：`Save` 会先把完整待上传快照、图片、代际、CloudKit 基线、内容摘要和唯一 operation ID 原子写入 `pending-cloud-upload.json`，再更新本地缓存与 catalog，CloudKit 上传进入仓库级后台队列；每个新代际会保留尚未确认的 predecessor operation IDs。即使云端已写成功、进程却在本地回执落盘前终止，重启后也能从远端 operation ID 证明这次写入属于自己，继续推进基线而不是产生假冲突
+- 共享仓库保存使用本地优先策略：`Save` 会先把完整待上传快照、图片、代际、CloudKit change tag、共同基线快照、内容摘要和唯一 operation ID 原子写入 `pending-cloud-upload.json`，再更新本地缓存与 catalog，CloudKit 上传进入仓库级后台队列；每个新代际会保留尚未确认的 predecessor operation IDs。即使云端已写成功、进程却在本地回执落盘前终止，重启后也能从远端 operation ID 证明这次写入属于自己，继续推进基线而不是产生假冲突
 - 同一仓库的普通保存、`encryptedDataReset` 重建和分享前保存全部经过同一个单写者队列；连续保存会合并最新代际并串行上传，旧上传完成时不会误清除或覆盖较新的待上传内容
 - 替换文章图片会先写入新的不可变文件引用，等包含新图片的 snapshot / outbox durable 后才清理旧图；失败时恢复旧快照和旧图片，避免在 CloudKit 尚未收到变化前原地破坏已提交内容
 - 接受可编辑共享时会在首次下载中同时保存服务端 `recordChangeTag`，因此接受后的第一次编辑会直接带正确基线提交，不会因为缺少基线产生假冲突
-- 每个待上传代际会记录最后一次已确认的 CloudKit `recordChangeTag`，保存使用 `.ifServerRecordUnchanged`；如果远端已经改变，应用保留本地副本和 outbox 并进入冲突状态，避免把另一台设备刚写好的日记静默覆盖
+- 每个待上传代际会记录最后一次已确认的 CloudKit `recordChangeTag`，保存使用 `.ifServerRecordUnchanged`。发生 `serverRecordChanged` 后会把服务端快照与 metadata 原子读回：远端 operation ID 等于当前操作时恢复本地回执，等于 predecessor 时推进基线后重试，属于另一端更新时按共同基线做三方合并，并先持久化 successor outbox 再更新本地 UI 和重试 CAS。同一保存只做有界的立即恢复，连续竞争则至少等待 `60` 秒且不早于 CloudKit retry-after，再由持久化后台机制继续，避免请求风暴
 - 当共享仓库正在本地保存或后台上传时，较旧的前台 / 推送刷新结果不会再覆盖当前设备刚写入的快照；新建或编辑后的文章会稳定留在列表里，不会先消失再晚点重新出现
 - “可见提醒”与 CloudKit 静默同步相互独立：用户拒绝通知权限或关闭 Settings 中的提醒时，订阅、后台同步和前台追赶仍然工作，只是不显示横幅、声音和角标
 - 角标不再跟“是否读过某篇文章”绑定；当后台同步检测到共享内容变化且可见提醒已开启时标 `1`，应用进入前台后立即清零
@@ -431,6 +435,9 @@ UI 测试模式会在 Blog Tags 管理区暴露测试专用重排按钮，用于
 - 共享仓库接受、可编辑共享首次保存的服务端基线、默认仓库启动、手动刷新、服务端 change tag、database change token 定位与持久化待处理 zone 收件箱、CloudKit retry-after 跨启动冷却、后台推送真实 completion、通知路由与图片恢复
 - 通知权限关闭时后台同步继续、文章删除提醒、前台 `30` 秒追赶去抖、后台兜底按数据库增量检查、推送只刷新发生变化的 zone
 - 共享仓库保存先落完整 outbox、CloudKit 后台上传、进程中断后从 outbox 恢复精确快照、operation / predecessor 幂等链、上传回执恢复、失败上传跨启动和 retry-after 到期补传、重叠上传代际与基线推进、服务端冲突不覆盖，以及根记录与变化 / 删除图片的单次原子提交
+- outbox v2 → v3 迁移、共同基线与亚秒时间摘要校验；同条目双改的确定性副本、双方独立新增 / 编辑、删除与修改、同图片引用但字节不同、旧合并结果重放不增殖，以及无基线时的保守无损 union
+- Cloud payload 把日期规范到整秒时不制造假双改或假删除，并覆盖 1970 年前的负时间戳
+- 启动账户确认不阻塞本地缓存、旧版本首次绑定必须明确确认、确认前编辑只落 outbox 不上传、相同账户恢复、真实 A → B 换号持续隔离、账户通知先停读写再查询、查询失败退避重试、旧 refresh / share / reset 晚回失效、冷启动分享与通知先加载 catalog，以及 G / G+1 冲突读取不会覆盖较新本地保存
 - 分享前 durable `prepareShare` 上传、分享失败跨启动续传、准备分享上传期间继续编辑的下一代串行补传，以及图片替换的不可变引用 / 回滚 / 延迟清理
 - zone 下载失败后不提前确认、后续成功重试，以及普通删除、带持久化 tombstone 的 `purged`、private owner / shared participant 的 `encryptedDataReset` 分支、重复 reset 回执、确认前继续编辑、并发新代际、缺失快照 / 图片拒绝上传、单写者恢复和确认时机
 - 生物识别开关与前后台再认证
@@ -451,14 +458,15 @@ UI 测试覆盖：
 
 ### 5.4 最近一次完整验证
 
-- 时间：2026-07-26 23:37 - 23:44（Europe/London）
-- 单元测试命令：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -derivedDataPath /tmp/thatDay-1.2.10-final-unit -parallel-testing-enabled NO -only-testing:thatDayTests`
-- UI 测试命令：`xcodebuild test -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -derivedDataPath /tmp/thatDay-1.2.10-final-ui -parallel-testing-enabled NO -only-testing:thatDayUITests`
+- 时间：2026-07-27 18:15 - 18:32（Europe/London）
+- 单元测试命令：`xcodebuild test -quiet -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -derivedDataPath /private/tmp/thatDay-sync-fix-final-unit2-20260727 -parallel-testing-enabled NO -only-testing:thatDayTests`
+- UI 测试命令：`xcodebuild test -quiet -project thatDay.xcodeproj -scheme thatDay -configuration Debug -destination 'platform=iOS Simulator,id=64C6D6C5-D361-411C-B2EC-AFC37DC1A55E' -derivedDataPath /private/tmp/thatDay-sync-fix-final-ui3-20260727 -parallel-testing-enabled NO -only-testing:thatDayUITests`
 - 结果：通过
-- 单元测试：157 项通过，零失败、零跳过
-- UI 测试：32 次执行通过（24 个常规 UI 用例 + 8 个 Launch test 动态参数运行），零失败
-- 单元测试 xcresult：`/tmp/thatDay-1.2.10-final-unit/Logs/Test/Test-thatDay-2026.07.26_23-37-59-+0100.xcresult`
-- UI 测试 xcresult：`/tmp/thatDay-1.2.10-final-ui/Logs/Test/Test-thatDay-2026.07.26_23-38-35-+0100.xcresult`
+- 单元测试：181 项通过，零失败、零跳过
+- UI 测试：32 次执行通过（24 个常规 UI 用例 + 8 个 Launch test 动态参数运行），零失败、零跳过
+- 单元测试 xcresult：`/private/tmp/thatDay-sync-fix-final-unit2-20260727/Logs/Test/Test-thatDay-2026.07.27_18-15-31-+0100.xcresult`
+- UI 测试 xcresult：`/private/tmp/thatDay-sync-fix-final-ui3-20260727/Logs/Test/Test-thatDay-2026.07.27_18-26-31-+0100.xcresult`
+- `1.2.11 (4)` 无签名 generic iOS Release 构建：通过
 
 ### 5.5 本次测试里看到但不属于业务失败的问题
 
@@ -481,6 +489,8 @@ UI 测试覆盖：
 - Apple 明确把静默推送和后台任务定义为系统调度的低优先级机会；Background App Refresh 被关闭、低电量 / 网络条件不合适或用户强制退出时，后台更新可能延后。实现依据：[Pushing background updates to your app](https://developer.apple.com/documentation/usernotifications/pushing-background-updates-to-your-app)、[Handling notifications and notification-related actions](https://developer.apple.com/documentation/uikit/uiapplicationdelegate/application(_:didreceiveremotenotification:fetchcompletionhandler:))、[Using background tasks to update your app](https://developer.apple.com/documentation/uikit/using-background-tasks-to-update-your-app)
 - CloudKit 推送只表示“可能有变化”，客户端仍需用 database / zone change token 拉取并保存游标；推送可以合并，不能当作逐条事件日志。实现依据：[Remote records](https://developer.apple.com/documentation/cloudkit/remote-records)、[CKDatabaseSubscription](https://developer.apple.com/documentation/cloudkit/ckdatabasesubscription)
 - CloudKit 没有适合客户端硬编码的统一“每分钟请求上限”，服务会动态节流；应用必须读取 retry-after 并延后。实现依据：[Understanding CloudKit throttles](https://developer.apple.com/documentation/technotes/tn3162-understanding-cloudkit-throttles)、[CKErrorRetryAfterKey](https://developer.apple.com/documentation/cloudkit/ckerrorretryafterkey)
+- `CKAccountChanged` 只表示 CloudKit 账号状态发生变化，不能直接等同于用户切换 Apple ID；临时不可用也必须保留本地缓存和待上传内容，等账户身份重新确认。实现依据：[CKAccountChanged](https://developer.apple.com/documentation/cloudkit/ckaccountchangednotification)、[CKAccountStatus.temporarilyUnavailable](https://developer.apple.com/documentation/cloudkit/ckaccountstatus/temporarilyunavailable)
+- 并发写入继续依赖 `.ifServerRecordUnchanged`，并在 `serverRecordChanged` 后重新读取服务器记录再判断 operation chain 或执行三方合并，绝不直接覆盖。实现依据：[CKModifyRecordsOperation.SavePolicy](https://developer.apple.com/documentation/cloudkit/ckmodifyrecordsoperation/savepolicy)、[CKError.serverRecordChanged](https://developer.apple.com/documentation/cloudkit/ckerror/serverrecordchanged)
 - Settings 里的“导入 ZIP 到当前仓库”当前仍是覆盖导入，不做差异合并；如果以后要支持 merge，需要先重新定义冲突规则
 
 ## 8. 许可协议

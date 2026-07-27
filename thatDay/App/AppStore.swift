@@ -119,6 +119,12 @@ private struct PendingRepositoryCloudSync {
     var mutationCount: Int
 }
 
+private enum CloudConflictRecoveryOutcome {
+    case completed
+    case retry
+    case unresolved(generation: Int)
+}
+
 private enum RepositoryRefreshOutcome {
     case unchanged
     case updated
@@ -138,6 +144,12 @@ final class AppStore {
     private static let foregroundSharedRefreshMinimumInterval: TimeInterval = 30
     private static let subscriptionConfigurationVersion = 3
     private static let subscriptionRevalidationInterval: TimeInterval = 7 * 24 * 60 * 60
+    private static let maximumImmediateCloudConflictRecoveryAttempts = 2
+    private static let cloudConflictRetryDelay: TimeInterval = 60
+    private static let cloudAccountVerificationRetryBaseDelay:
+        TimeInterval = 60
+    private static let cloudAccountVerificationRetryMaximumDelay:
+        TimeInterval = 15 * 60
 
     private let libraryStore: RepositoryLibraryStore
     private let cloudService: any CloudRepositoryServicing
@@ -154,6 +166,18 @@ final class AppStore {
     private var didLoadPersistentState = false
     private var hasLoadedPreferences = false
     private var isApplicationActive = false
+    private var arePendingCloudUploadsQuarantined = true
+    private var cloudAccountVerificationSequence = 0
+    private var cloudAccountTransitionSequence = 0
+    private var activeCloudAccountTransitionSequence: Int?
+    private var requiresCloudAccountTransitionResetAfterVerification =
+        false
+    private var cloudAccountVerificationRetryAttempt = 0
+    private var cloudAccountVerificationRetryTask:
+        Task<Void, Never>?
+    private var pendingCloudAccountMigrationUserRecordName:
+        String?
+    private var pendingCloudAccountMigrationEpoch: Int?
     private var preferences = AppPreferences()
     private var shouldRequireAuthenticationOnNextActive = false
     private var shouldEnsureSubscriptionsAfterUnlock = false
@@ -163,6 +187,9 @@ final class AppStore {
     private var sharedCloudThrottleRetryTask: Task<Void, Never>?
     private var sharedRepositoryRefreshTask: Task<SharedRepositoryRefreshResult, Never>?
     private var sharedRepositoryRefreshTaskID: UUID?
+    private var encryptedResetReconciliationTask:
+        Task<Void, Never>?
+    private var encryptedResetReconciliationTaskID: UUID?
     private var subscriptionValidationAttemptedScopes:
         Set<CloudDatabaseScope> = []
     private var repositoryMutationGenerations: [String: Int] = [:]
@@ -170,6 +197,12 @@ final class AppStore {
     private var repositoriesPendingRefreshAfterMutation: Set<String> = []
     private var pendingRepositoryCloudSyncs: [String: PendingRepositoryCloudSync] = [:]
     private var repositoryCloudSyncTasks: [String: Task<Void, Never>] = [:]
+    private var repositoryCloudConflictRecoveryAttempts:
+        [String: Int] = [:]
+    private var repositoryCloudConflictRetryTasks:
+        [String: Task<Void, Never>] = [:]
+    private var pendingCloudShareURLs: [URL] = []
+    private var pendingCloudShareMetadata: [CKShare.Metadata] = []
 
     var selectedTab: AppTab = .journal
     var selectedDate: Date
@@ -183,6 +216,7 @@ final class AppStore {
     var sharingControllerItem: SharingControllerItem?
     var isBusy = false
     var alertMessage: String?
+    var isCloudAccountMigrationConfirmationPresented = false
     var entryOpenRequest: EntryOpenRequest?
     var isAuthenticationRequired = false
     var isAuthenticating = false
@@ -520,6 +554,7 @@ final class AppStore {
 
         do {
             try await preparePersistentStateIfNeeded()
+            await processPendingCloudSharesIfPossible()
             await resumePendingCloudSyncs()
             await ensureRepositorySubscriptions()
             if preferences.isBiometricLockEnabled {
@@ -545,6 +580,10 @@ final class AppStore {
             return
         }
 
+        // Keep durable outbound work paused until the CloudKit identity has
+        // been verified. Local cache loading below does not require network
+        // access and should remain immediately available while offline.
+        arePendingCloudUploadsQuarantined = true
         repositories = try libraryStore.loadCatalog()
         for reference in repositories {
             try repositoryArchiveService.recoverInterruptedImport(
@@ -556,7 +595,6 @@ final class AppStore {
         try reconcileCloudUploadOutboxes()
         sharedCloudThrottleUntil = preferences.cloudRetryAfter
         scheduleSharedCloudRetryIfNeeded()
-        await reconcileAttemptedEncryptedResetAcknowledgements()
         lastSharedRepositoryRefreshAt = preferences.lastSuccessfulCloudRefreshAt
         if repositories.contains(where: { $0.cloudUploadConflictDetectedAt != nil }) {
             alertMessage = Self.userFacingMessage(
@@ -572,6 +610,296 @@ final class AppStore {
             : RepositoryReference.localRepositoryID
         try await loadRepository(repositoryID: launchRepositoryID, behavior: .localCacheOnly)
         didLoadPersistentState = true
+
+        // This is deliberately after local cache installation so a slow or
+        // unavailable CloudKit account lookup never delays the first screen.
+        if activeCloudAccountTransitionSequence == nil {
+            await verifyCloudAccountBeforePendingUploads()
+            await reconcileAttemptedEncryptedResetAcknowledgements()
+        }
+    }
+
+    @discardableResult
+    private func verifyCloudAccountBeforePendingUploads() async
+        -> Bool {
+        cloudAccountVerificationSequence &+= 1
+        let verificationSequence =
+            cloudAccountVerificationSequence
+        let availability: CloudAccountAvailability
+        do {
+            availability =
+                try await cloudService.cloudAccountAvailability()
+        } catch {
+            guard cloudAccountVerificationSequence ==
+                        verificationSequence,
+                  activeCloudAccountTransitionSequence == nil else {
+                return false
+            }
+            arePendingCloudUploadsQuarantined = true
+            SyncDiagnostics.logger.error(
+                "Could not verify the CloudKit account before resuming durable uploads: \(String(describing: error), privacy: .public)"
+            )
+            scheduleCloudAccountVerificationRetry(for: error)
+            return false
+        }
+        guard cloudAccountVerificationSequence ==
+                    verificationSequence,
+              activeCloudAccountTransitionSequence == nil else {
+            return false
+        }
+
+        switch availability {
+        case .available(let userRecordName):
+            if cloudService
+                .requiresExplicitAccountIdentityMigrationConfirmation,
+               preferences.cloudAccountUserRecordName == nil,
+               hasExistingCloudStateRequiringIdentityConfirmation() {
+                arePendingCloudUploadsQuarantined = true
+                pendingCloudAccountMigrationUserRecordName =
+                    userRecordName
+                pendingCloudAccountMigrationEpoch =
+                    cloudAccountTransitionSequence
+                isCloudAccountMigrationConfirmationPresented =
+                    true
+                return false
+            }
+            if let expectedUserRecordName =
+                    preferences.cloudAccountUserRecordName,
+               expectedUserRecordName != userRecordName {
+                arePendingCloudUploadsQuarantined = true
+                alertMessage = L10n.string(
+                    "The iCloud account changed. Cached repositories and pending updates remain safely on this device; switch back to the original account to resume sync."
+                )
+                return false
+            }
+            guard persistVerifiedCloudAccountIdentity(
+                userRecordName
+            ) else {
+                return false
+            }
+            cloudAccountVerificationRetryTask?.cancel()
+            cloudAccountVerificationRetryTask = nil
+            cloudAccountVerificationRetryAttempt = 0
+            if !requiresCloudAccountTransitionResetAfterVerification {
+                arePendingCloudUploadsQuarantined = false
+            }
+            return true
+        case .temporarilyUnavailable:
+            arePendingCloudUploadsQuarantined = true
+            scheduleCloudAccountVerificationRetry()
+            return false
+        case .unavailable:
+            arePendingCloudUploadsQuarantined = true
+            return false
+        }
+    }
+
+    private func hasExistingCloudStateRequiringIdentityConfirmation()
+        -> Bool {
+        if repositories.contains(where: {
+            $0.descriptor.isCloudBacked
+        }) {
+            return true
+        }
+        return repositories.contains { reference in
+            (try? cloudUploadOutboxStore(
+                for: reference.id
+            ).load()) != nil
+        }
+    }
+
+    private func isCloudAccountOperationCurrent(
+        _ accountEpoch: Int
+    ) -> Bool {
+        accountEpoch == cloudAccountTransitionSequence &&
+            !arePendingCloudUploadsQuarantined
+    }
+
+    @discardableResult
+    private func persistVerifiedCloudAccountIdentity(
+        _ userRecordName: String
+    ) -> Bool {
+        if preferences.cloudAccountUserRecordName ==
+                userRecordName {
+            return true
+        }
+        let previousUserRecordName =
+            preferences.cloudAccountUserRecordName
+        preferences.cloudAccountUserRecordName =
+            userRecordName
+        do {
+            try libraryStore.savePreferences(preferences)
+            return true
+        } catch {
+            preferences.cloudAccountUserRecordName =
+                previousUserRecordName
+            arePendingCloudUploadsQuarantined = true
+            SyncDiagnostics.logger.error(
+                "Could not durably save the verified CloudKit account identity; cloud work remains quarantined: \(String(describing: error), privacy: .public)"
+            )
+            scheduleCloudAccountVerificationRetry(for: error)
+            alertMessage = Self.userFacingMessage(for: error)
+            return false
+        }
+    }
+
+    private func scheduleCloudAccountVerificationRetry(
+        for error: Error? = nil
+    ) {
+        cloudAccountVerificationRetryAttempt += 1
+        let exponentialDelay = min(
+            Self.cloudAccountVerificationRetryMaximumDelay,
+            Self.cloudAccountVerificationRetryBaseDelay *
+                pow(
+                    2,
+                    Double(
+                        max(
+                            0,
+                            cloudAccountVerificationRetryAttempt - 1
+                        )
+                    )
+                )
+        )
+        let retryDelay =
+            error.flatMap(Self.cloudKitRetryAfterSeconds(in:))
+                .map {
+                    max($0, exponentialDelay)
+                } ??
+            exponentialDelay
+        let retryAt = now().addingTimeInterval(retryDelay)
+        scheduleBackgroundRefreshAfter(retryAt)
+        cloudAccountVerificationRetryTask?.cancel()
+        let sleepUntilSharedCloudRetry =
+            sleepUntilSharedCloudRetry
+        cloudAccountVerificationRetryTask =
+            Task { @MainActor [weak self] in
+                do {
+                    try await sleepUntilSharedCloudRetry(retryAt)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled,
+                      let self,
+                      self.activeCloudAccountTransitionSequence ==
+                        nil,
+                      self.arePendingCloudUploadsQuarantined else {
+                    return
+                }
+                let accountEpoch =
+                    self.cloudAccountTransitionSequence
+                self.cloudAccountVerificationRetryTask = nil
+                guard await self
+                    .verifyCloudAccountBeforePendingUploads(),
+                      self.cloudAccountTransitionSequence ==
+                        accountEpoch else {
+                    return
+                }
+                if self
+                    .requiresCloudAccountTransitionResetAfterVerification {
+                    await self
+                        .completeVerifiedCloudAccountTransition(
+                            accountEpoch: accountEpoch
+                        )
+                    return
+                }
+                await self
+                    .reconcileAttemptedEncryptedResetAcknowledgements()
+                await self.processPendingCloudSharesIfPossible()
+                await self.resumePendingCloudSyncs()
+                await self.ensureRepositorySubscriptions()
+                if self.isApplicationActive &&
+                    !self.isAuthenticationRequired {
+                    _ = await self.refreshSharedRepositories(
+                        trigger: .foreground
+                    )
+                }
+            }
+    }
+
+    func confirmCurrentICloudAccountForMigration() async {
+        guard let candidateUserRecordName =
+                pendingCloudAccountMigrationUserRecordName,
+              let accountEpoch =
+                pendingCloudAccountMigrationEpoch else {
+            return
+        }
+        isBusy = true
+        defer { isBusy = false }
+
+        cloudAccountVerificationSequence &+= 1
+        let verificationSequence =
+            cloudAccountVerificationSequence
+        do {
+            let availability =
+                try await cloudService.cloudAccountAvailability()
+            guard verificationSequence ==
+                    cloudAccountVerificationSequence,
+                  accountEpoch ==
+                    cloudAccountTransitionSequence else {
+                return
+            }
+            guard case .available(let currentUserRecordName) =
+                    availability,
+                  currentUserRecordName ==
+                    candidateUserRecordName else {
+                arePendingCloudUploadsQuarantined = true
+                alertMessage = L10n.string(
+                    "The iCloud account changed while it was being confirmed. Sync remains paused; reopen the app and confirm the original account."
+                )
+                return
+            }
+
+            guard persistVerifiedCloudAccountIdentity(
+                currentUserRecordName
+            ) else {
+                return
+            }
+            pendingCloudAccountMigrationUserRecordName = nil
+            pendingCloudAccountMigrationEpoch = nil
+            isCloudAccountMigrationConfirmationPresented = false
+            cloudAccountVerificationRetryTask?.cancel()
+            cloudAccountVerificationRetryTask = nil
+            cloudAccountVerificationRetryAttempt = 0
+            if requiresCloudAccountTransitionResetAfterVerification {
+                await completeVerifiedCloudAccountTransition(
+                    accountEpoch: accountEpoch
+                )
+                return
+            }
+
+            arePendingCloudUploadsQuarantined = false
+            await reconcileAttemptedEncryptedResetAcknowledgements()
+            guard isCloudAccountOperationCurrent(accountEpoch) else {
+                return
+            }
+            await processPendingCloudSharesIfPossible()
+            guard isCloudAccountOperationCurrent(accountEpoch) else {
+                return
+            }
+            await resumePendingCloudSyncs()
+            guard isCloudAccountOperationCurrent(accountEpoch) else {
+                return
+            }
+            await ensureRepositorySubscriptions()
+            guard isCloudAccountOperationCurrent(accountEpoch) else {
+                return
+            }
+            _ = await refreshSharedRepositories(
+                trigger: .foreground
+            )
+        } catch {
+            guard accountEpoch ==
+                    cloudAccountTransitionSequence else {
+                return
+            }
+            arePendingCloudUploadsQuarantined = true
+            scheduleCloudAccountVerificationRetry(for: error)
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func keepCloudAccountMigrationSyncPaused() {
+        isCloudAccountMigrationConfirmationPresented = false
     }
 
     private func resetCalendarContextToToday() {
@@ -930,6 +1258,13 @@ final class AppStore {
             alertMessage = L10n.string("Only the repository owner can create a share invite.")
             return
         }
+        let accountEpoch = cloudAccountTransitionSequence
+        guard isCloudAccountOperationCurrent(accountEpoch) else {
+            alertMessage = L10n.string(
+                "iCloud account verification is in progress. Try creating the share again when it finishes."
+            )
+            return
+        }
 
         isBusy = true
         defer { isBusy = false }
@@ -999,6 +1334,10 @@ final class AppStore {
             if let uploadTask = repositoryCloudSyncTasks[repositoryID] {
                 await uploadTask.value
             }
+            guard isCloudAccountOperationCurrent(accountEpoch),
+                  !Task.isCancelled else {
+                return
+            }
 
             guard let reference = repositoryReference(for: repositoryID)
             else {
@@ -1030,8 +1369,15 @@ final class AppStore {
                 snapshot: snapshot,
                 access: shareAccessOption
             )
+            guard isCloudAccountOperationCurrent(accountEpoch),
+                  !Task.isCancelled else {
+                return
+            }
             sharingControllerItem = SharingControllerItem(controller: controller)
         } catch {
+            guard isCloudAccountOperationCurrent(accountEpoch) else {
+                return
+            }
             _ = recordSharedCloudThrottleIfNeeded(for: error)
             alertMessage = Self.userFacingMessage(for: error)
         }
@@ -1044,12 +1390,63 @@ final class AppStore {
             alertMessage = L10n.string("Enter a valid iCloud share link.")
             return
         }
+        do {
+            try await preparePersistentStateIfNeeded()
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+            return
+        }
+
+        guard !arePendingCloudUploadsQuarantined else {
+            if !pendingCloudShareURLs.contains(url) {
+                pendingCloudShareURLs.append(url)
+            }
+            alertMessage = L10n.string(
+                "iCloud account verification is in progress. The share will be accepted automatically when it finishes."
+            )
+            return
+        }
 
         isBusy = true
         defer { isBusy = false }
 
+        await acceptVerifiedShare(from: url)
+    }
+
+    func acceptShare(metadata: CKShare.Metadata) async {
+        do {
+            try await preparePersistentStateIfNeeded()
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+            return
+        }
+        guard !arePendingCloudUploadsQuarantined else {
+            pendingCloudShareMetadata.append(metadata)
+            alertMessage = L10n.string(
+                "iCloud account verification is in progress. The share will be accepted automatically when it finishes."
+            )
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        await acceptVerifiedShare(metadata: metadata)
+    }
+
+    private func acceptVerifiedShare(from url: URL) async {
+        let accountEpoch = cloudAccountTransitionSequence
+        guard isCloudAccountOperationCurrent(accountEpoch) else {
+            deferIncomingShare(url)
+            return
+        }
         do {
             let accepted = try await cloudService.acceptShare(from: url)
+            guard isCloudAccountOperationCurrent(accountEpoch),
+                  !Task.isCancelled else {
+                deferIncomingShare(url)
+                return
+            }
             try applyAcceptedShare(accepted)
             incomingShareLink = ""
             try await loadRepository(
@@ -1058,16 +1455,29 @@ final class AppStore {
             )
             await ensureRepositorySubscriptions()
         } catch {
+            guard isCloudAccountOperationCurrent(accountEpoch) else {
+                deferIncomingShare(url)
+                return
+            }
             alertMessage = Self.userFacingMessage(for: error)
         }
     }
 
-    func acceptShare(metadata: CKShare.Metadata) async {
-        isBusy = true
-        defer { isBusy = false }
-
+    private func acceptVerifiedShare(
+        metadata: CKShare.Metadata
+    ) async {
+        let accountEpoch = cloudAccountTransitionSequence
+        guard isCloudAccountOperationCurrent(accountEpoch) else {
+            pendingCloudShareMetadata.append(metadata)
+            return
+        }
         do {
             let accepted = try await cloudService.acceptShare(metadata: metadata)
+            guard isCloudAccountOperationCurrent(accountEpoch),
+                  !Task.isCancelled else {
+                pendingCloudShareMetadata.append(metadata)
+                return
+            }
             try applyAcceptedShare(accepted)
             try await loadRepository(
                 repositoryID: accepted.descriptor.storageIdentifier,
@@ -1075,7 +1485,39 @@ final class AppStore {
             )
             await ensureRepositorySubscriptions()
         } catch {
+            guard isCloudAccountOperationCurrent(accountEpoch) else {
+                pendingCloudShareMetadata.append(metadata)
+                return
+            }
             alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    private func deferIncomingShare(_ url: URL) {
+        if !pendingCloudShareURLs.contains(url) {
+            pendingCloudShareURLs.append(url)
+        }
+    }
+
+    private func processPendingCloudSharesIfPossible() async {
+        guard !arePendingCloudUploadsQuarantined,
+              !pendingCloudShareURLs.isEmpty ||
+                !pendingCloudShareMetadata.isEmpty else {
+            return
+        }
+
+        let urls = pendingCloudShareURLs
+        let metadata = pendingCloudShareMetadata
+        pendingCloudShareURLs.removeAll()
+        pendingCloudShareMetadata.removeAll()
+
+        isBusy = true
+        defer { isBusy = false }
+        for url in urls {
+            await acceptVerifiedShare(from: url)
+        }
+        for item in metadata {
+            await acceptVerifiedShare(metadata: item)
         }
     }
 
@@ -1278,11 +1720,22 @@ final class AppStore {
         trigger: SharedRepositoryRefreshTrigger,
         target: CloudRemoteNotificationTarget? = nil
     ) async -> SharedRepositoryRefreshResult {
+        guard !arePendingCloudUploadsQuarantined else {
+            return SharedRepositoryRefreshResult(
+                failedRepositoryCount: 1
+            )
+        }
         while let existingTask = sharedRepositoryRefreshTask {
             _ = await existingTask.value
         }
+        guard !arePendingCloudUploadsQuarantined else {
+            return SharedRepositoryRefreshResult(
+                failedRepositoryCount: 1
+            )
+        }
 
         let taskID = UUID()
+        let accountEpoch = cloudAccountTransitionSequence
         let task = Task { @MainActor [weak self] in
             guard let self else {
                 return SharedRepositoryRefreshResult(failedRepositoryCount: 1)
@@ -1290,7 +1743,8 @@ final class AppStore {
 
             let result = await self.performSharedRepositoryRefresh(
                 trigger: trigger,
-                target: target
+                target: target,
+                accountEpoch: accountEpoch
             )
             if self.sharedRepositoryRefreshTaskID == taskID {
                 self.sharedRepositoryRefreshTask = nil
@@ -1305,6 +1759,19 @@ final class AppStore {
             await task.value
         } onCancel: {
             task.cancel()
+        }
+    }
+
+    private func quiesceSharedRepositoryRefresh() async {
+        guard let task = sharedRepositoryRefreshTask else {
+            return
+        }
+        let taskID = sharedRepositoryRefreshTaskID
+        task.cancel()
+        _ = await task.value
+        if sharedRepositoryRefreshTaskID == taskID {
+            sharedRepositoryRefreshTask = nil
+            sharedRepositoryRefreshTaskID = nil
         }
     }
 
@@ -1379,9 +1846,129 @@ final class AppStore {
     }
 
     func handleCloudAccountChange() async {
+        cloudAccountTransitionSequence &+= 1
+        let transitionSequence = cloudAccountTransitionSequence
+        cloudAccountVerificationSequence &+= 1
+        let verificationSequence =
+            cloudAccountVerificationSequence
+        activeCloudAccountTransitionSequence = transitionSequence
+        requiresCloudAccountTransitionResetAfterVerification = true
+        arePendingCloudUploadsQuarantined = true
+        pendingCloudAccountMigrationUserRecordName = nil
+        pendingCloudAccountMigrationEpoch = nil
+        isCloudAccountMigrationConfirmationPresented = false
+        cloudAccountVerificationRetryTask?.cancel()
+        cloudAccountVerificationRetryTask = nil
+        defer {
+            if activeCloudAccountTransitionSequence ==
+                    transitionSequence {
+                activeCloudAccountTransitionSequence = nil
+            }
+        }
+
+        // CKAccountChanged invalidates the assumptions of every in-flight
+        // database operation. Freeze and drain readers and writers before
+        // awaiting any fallible account-status or user-record lookup.
+        await quiesceSharedRepositoryRefresh()
+        await quiesceEncryptedResetReconciliation()
+        await quiesceAllRepositoryCloudSyncs()
+
         do {
             try await preparePersistentStateIfNeeded()
         } catch {
+            return
+        }
+        guard activeCloudAccountTransitionSequence ==
+                    transitionSequence,
+              cloudAccountVerificationSequence ==
+                    verificationSequence else {
+            return
+        }
+
+        let accountAvailability: CloudAccountAvailability
+        do {
+            accountAvailability =
+                try await cloudService.cloudAccountAvailability()
+        } catch {
+            SyncDiagnostics.logger.error(
+                "Could not determine CloudKit account availability after CKAccountChanged: \(String(describing: error), privacy: .public)"
+            )
+            scheduleCloudAccountVerificationRetry(for: error)
+            return
+        }
+        guard activeCloudAccountTransitionSequence ==
+                    transitionSequence,
+              cloudAccountVerificationSequence ==
+                    verificationSequence else {
+            return
+        }
+
+        let availableUserRecordName: String
+        switch accountAvailability {
+        case .temporarilyUnavailable:
+            // Apple explicitly asks clients to retain cached data and wait for
+            // availability to recover. Keep the notification path, plus one
+            // bounded local/background retry so a missed/coalesced notification
+            // cannot leave durable uploads quarantined forever.
+            SyncDiagnostics.logger.notice(
+                "CloudKit account is temporarily unavailable; preserved pending uploads and cached repositories."
+            )
+            scheduleCloudAccountVerificationRetry()
+            return
+        case .unavailable:
+            SyncDiagnostics.logger.notice(
+                "CloudKit account is unavailable; preserved pending uploads and cached repositories."
+            )
+            return
+        case .available(let userRecordName):
+            availableUserRecordName = userRecordName
+        }
+
+        if cloudService
+            .requiresExplicitAccountIdentityMigrationConfirmation,
+           preferences.cloudAccountUserRecordName == nil,
+           hasExistingCloudStateRequiringIdentityConfirmation() {
+            pendingCloudAccountMigrationUserRecordName =
+                availableUserRecordName
+            pendingCloudAccountMigrationEpoch =
+                transitionSequence
+            isCloudAccountMigrationConfirmationPresented =
+                true
+            return
+        }
+        if let expectedUserRecordName =
+                preferences.cloudAccountUserRecordName,
+           expectedUserRecordName != availableUserRecordName {
+            alertMessage = L10n.string(
+                "The iCloud account changed. Cached repositories and pending updates remain safely on this device; switch back to the original account to resume sync."
+            )
+            SyncDiagnostics.logger.error(
+                "Quarantined durable CloudKit uploads because the iCloud user record changed."
+            )
+            return
+        }
+        guard persistVerifiedCloudAccountIdentity(
+            availableUserRecordName
+        ) else {
+            return
+        }
+        activeCloudAccountTransitionSequence = nil
+        cloudAccountVerificationRetryTask?.cancel()
+        cloudAccountVerificationRetryTask = nil
+        cloudAccountVerificationRetryAttempt = 0
+        await completeVerifiedCloudAccountTransition(
+            accountEpoch: transitionSequence
+        )
+    }
+
+    private func completeVerifiedCloudAccountTransition(
+        accountEpoch: Int
+    ) async {
+        guard accountEpoch == cloudAccountTransitionSequence else {
+            return
+        }
+        guard requiresCloudAccountTransitionResetAfterVerification else {
+            arePendingCloudUploadsQuarantined = false
             return
         }
 
@@ -1392,22 +1979,51 @@ final class AppStore {
             repositories[index].lastKnownServerRecordChangeTag = nil
             repositories[index].lastKnownServerModifiedAt = nil
             repositories[index].cloudZoneUnavailableAt = nil
-            if repositories[index].pendingCloudUploadGeneration != nil {
-                repositories[index].cloudUploadConflictServerChangeTag = nil
-                repositories[index].cloudUploadConflictDetectedAt = now()
-            }
         }
         try? persistRepositoryCatalog()
-        try? await cloudService.resetRemoteChangeTracking()
+        do {
+            try await cloudService.resetRemoteChangeTracking()
+        } catch {
+            guard accountEpoch == cloudAccountTransitionSequence else {
+                return
+            }
+            SyncDiagnostics.logger.error(
+                "Could not reset CloudKit change tracking after account verification: \(String(describing: error), privacy: .public)"
+            )
+            scheduleCloudAccountVerificationRetry(for: error)
+            return
+        }
+        guard accountEpoch == cloudAccountTransitionSequence else {
+            return
+        }
+        requiresCloudAccountTransitionResetAfterVerification = false
+        arePendingCloudUploadsQuarantined = false
+        await reconcileAttemptedEncryptedResetAcknowledgements()
+        guard accountEpoch == cloudAccountTransitionSequence else {
+            return
+        }
+        await processPendingCloudSharesIfPossible()
+        guard accountEpoch == cloudAccountTransitionSequence else {
+            return
+        }
+        await resumePendingCloudSyncs()
+        guard accountEpoch == cloudAccountTransitionSequence else {
+            return
+        }
         await ensureRepositorySubscriptions()
+        guard accountEpoch == cloudAccountTransitionSequence else {
+            return
+        }
         await refreshSharedRepositories(trigger: .foreground)
     }
 
     private func performSharedRepositoryRefresh(
         trigger: SharedRepositoryRefreshTrigger,
-        target: CloudRemoteNotificationTarget?
+        target: CloudRemoteNotificationTarget?,
+        accountEpoch: Int
     ) async -> SharedRepositoryRefreshResult {
-        guard !Task.isCancelled else {
+        guard !Task.isCancelled,
+              isCloudAccountOperationCurrent(accountEpoch) else {
             return SharedRepositoryRefreshResult(failedRepositoryCount: 1)
         }
 
@@ -1424,6 +2040,12 @@ final class AppStore {
         } catch {
             _ = recordSharedCloudThrottleIfNeeded(for: error)
             return SharedRepositoryRefreshResult(failedRepositoryCount: 1)
+        }
+        guard !Task.isCancelled,
+              isCloudAccountOperationCurrent(accountEpoch) else {
+            return SharedRepositoryRefreshResult(
+                failedRepositoryCount: 1
+            )
         }
 
         var result = SharedRepositoryRefreshResult()
@@ -1445,7 +2067,8 @@ final class AppStore {
         var didEncounterCloudThrottle = false
 
         for deletion in selection.deletedZones {
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled,
+                  isCloudAccountOperationCurrent(accountEpoch) else {
                 result.failedRepositoryCount += 1
                 break
             }
@@ -1453,8 +2076,14 @@ final class AppStore {
             do {
                 let deletionResult = try await handleRepositoryZoneDeletion(
                     deletion,
-                    databaseScope: selection.databaseScope
+                    databaseScope: selection.databaseScope,
+                    accountEpoch: accountEpoch
                 )
+                guard !Task.isCancelled,
+                      isCloudAccountOperationCurrent(accountEpoch) else {
+                    result.failedRepositoryCount += 1
+                    break
+                }
                 result.checkedRepositoryCount += deletionResult.checkedCount
                 result.updatedRepositoryCount += deletionResult.updatedCount
                 acknowledgedDeletedZones.insert(deletion)
@@ -1468,14 +2097,19 @@ final class AppStore {
         }
 
         for reference in selection.references where !didEncounterCloudThrottle {
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled,
+                  isCloudAccountOperationCurrent(accountEpoch) else {
                 result.failedRepositoryCount += 1
                 break
             }
 
             result.checkedRepositoryCount += 1
             do {
-                switch try await refreshRepository(reference, trigger: trigger) {
+                switch try await refreshRepository(
+                    reference,
+                    trigger: trigger,
+                    accountEpoch: accountEpoch
+                ) {
                 case .updated:
                     result.updatedRepositoryCount += 1
                     if let zoneID = cloudZoneIdentity(for: reference) {
@@ -1506,6 +2140,10 @@ final class AppStore {
            (!acknowledgedModifiedZoneIDs.isEmpty ||
             !acknowledgedDeletedZones.isEmpty) {
             do {
+                guard !Task.isCancelled,
+                      isCloudAccountOperationCurrent(accountEpoch) else {
+                    throw CancellationError()
+                }
                 try commitEncryptedResetAcknowledgementReceipts(
                     acknowledgedDeletedZones
                 )
@@ -1519,6 +2157,10 @@ final class AppStore {
                     ),
                     in: databaseScope
                 )
+                guard !Task.isCancelled,
+                      isCloudAccountOperationCurrent(accountEpoch) else {
+                    throw CancellationError()
+                }
                 try completeEncryptedResetAcknowledgements(
                     acknowledgedDeletedZones
                 )
@@ -1528,7 +2170,8 @@ final class AppStore {
             }
         }
 
-        if result.failedRepositoryCount == 0,
+        if isCloudAccountOperationCurrent(accountEpoch),
+           result.failedRepositoryCount == 0,
            target == nil,
            trigger == .launch || trigger == .foreground {
             recordSuccessfulFullCloudRefresh()
@@ -1538,6 +2181,12 @@ final class AppStore {
     }
 
     func handleNotificationRoute(_ route: NotificationEntryRoute) async {
+        do {
+            try await preparePersistentStateIfNeeded()
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+            return
+        }
         if route.repositoryID != currentRepositoryID {
             await switchRepository(to: route.repositoryID)
         }
@@ -1670,6 +2319,17 @@ final class AppStore {
                         existingOutbox?.baseRecordChangeTag ??
                         currentReference.pendingCloudUploadBaseChangeTag ??
                         currentReference.lastKnownServerRecordChangeTag
+                let baseSnapshot =
+                    if let existingOutbox {
+                        existingOutbox.receipt == nil
+                            ? existingOutbox.baseSnapshot
+                            : existingOutbox.snapshot
+                    } else {
+                        try cloudUploadBaselineSnapshot(
+                            from: repositoryStore.loadSnapshot(),
+                            repositoryStore: repositoryStore
+                        )
+                    }
                 let outbox = try CloudUploadOutboxRecord(
                     repositoryID: repositoryID,
                     descriptor: descriptor,
@@ -1677,6 +2337,7 @@ final class AppStore {
                     snapshot: cloudSnapshot,
                     generation: generation,
                     baseRecordChangeTag: baseRecordChangeTag,
+                    baseSnapshot: baseSnapshot,
                     predecessorOperationIDs:
                         existingOutbox?
                             .successorPredecessorOperationIDs ?? [],
@@ -1888,6 +2549,21 @@ final class AppStore {
         )
     }
 
+    private func cloudUploadBaselineSnapshot(
+        from snapshot: RepositorySnapshot?,
+        repositoryStore: LocalRepositoryStore
+    ) throws -> RepositorySnapshot? {
+        guard var snapshot else {
+            return nil
+        }
+        snapshot = snapshot.removingEmbeddedImages()
+        snapshot.imageContentHashes =
+            try repositoryStore.imageContentHashes(
+                referencedBy: snapshot.entries
+            )
+        return snapshot
+    }
+
     private func reconcilePendingCloudPurges() throws {
         let repositoryIDs = Set(
             repositories.compactMap { reference in
@@ -1934,6 +2610,19 @@ final class AppStore {
                     repositories[index].pendingCloudUploadGeneration = outbox.generation
                     repositories[index].pendingCloudUploadBaseChangeTag =
                         outbox.baseRecordChangeTag
+                    if repositories[index]
+                        .cloudUploadConflictDetectedAt != nil {
+                        // Older builds persisted every recordChangeTag mismatch
+                        // as a permanent stop. The current uploader can safely
+                        // revalidate and rebase a durable outbox, so unlock it.
+                        repositories[index]
+                            .cloudUploadConflictServerChangeTag = nil
+                        repositories[index]
+                            .cloudUploadConflictDetectedAt = nil
+                        SyncDiagnostics.logger.notice(
+                            "Unlocked a durable CloudKit outbox for conflict revalidation."
+                        )
+                    }
                 }
                 didChangeCatalog = true
                 continue
@@ -2234,6 +2923,8 @@ final class AppStore {
 
         do {
             let existingOutbox = try outboxStore.load()
+            let previousLocalSnapshot =
+                try repositoryStore.loadSnapshot()
             let isPendingLocalShare =
                 descriptorAtStart.role == .local &&
                 existingOutbox?.mode == .prepareShare &&
@@ -2271,6 +2962,17 @@ final class AppStore {
                         existingOutbox?.baseRecordChangeTag ??
                         currentReference?.pendingCloudUploadBaseChangeTag ??
                         currentReference?.lastKnownServerRecordChangeTag
+                let baseSnapshot =
+                    if let existingOutbox {
+                        existingOutbox.receipt == nil
+                            ? existingOutbox.baseSnapshot
+                            : existingOutbox.snapshot
+                    } else {
+                        try cloudUploadBaselineSnapshot(
+                            from: previousLocalSnapshot,
+                            repositoryStore: repositoryStore
+                        )
+                    }
                 let outbox = try CloudUploadOutboxRecord(
                     repositoryID: repositoryID,
                     descriptor: descriptorAtStart,
@@ -2278,6 +2980,7 @@ final class AppStore {
                     snapshot: cloudSnapshot,
                     generation: generation,
                     baseRecordChangeTag: baseRecordChangeTag,
+                    baseSnapshot: baseSnapshot,
                     predecessorOperationIDs:
                         existingOutbox?
                             .successorPredecessorOperationIDs ?? [],
@@ -2381,7 +3084,13 @@ final class AppStore {
         let backgroundTask = ApplicationBackgroundTaskLease(
             name: "Upload shared repository \(repositoryID)"
         )
-        defer { backgroundTask.end() }
+        repositoryCloudConflictRecoveryAttempts[repositoryID] = 0
+        defer {
+            repositoryCloudConflictRecoveryAttempts.removeValue(
+                forKey: repositoryID
+            )
+            backgroundTask.end()
+        }
 
         while !Task.isCancelled {
             guard let pendingSync = pendingRepositoryCloudSyncs
@@ -2398,6 +3107,9 @@ final class AppStore {
     private func quiesceRepositoryCloudSync(
         for repositoryID: String
     ) async {
+        repositoryCloudConflictRetryTasks
+            .removeValue(forKey: repositoryID)?
+            .cancel()
         while let task = repositoryCloudSyncTasks[repositoryID] {
             task.cancel()
             await task.value
@@ -2415,6 +3127,62 @@ final class AppStore {
         }
     }
 
+    private func quiesceAllRepositoryCloudSyncs() async {
+        let repositoryIDs = Set(repositoryCloudSyncTasks.keys)
+            .union(repositoryCloudConflictRetryTasks.keys)
+            .union(pendingRepositoryCloudSyncs.keys)
+        for repositoryID in repositoryIDs {
+            await quiesceRepositoryCloudSync(for: repositoryID)
+        }
+    }
+
+    private func scheduleDeferredCloudConflictRetry(
+        repositoryID: String,
+        descriptor: RepositoryDescriptor,
+        displayName: String
+    ) {
+        let retryAt = now().addingTimeInterval(
+            Self.cloudConflictRetryDelay
+        )
+        scheduleBackgroundRefreshAfter(retryAt)
+        repositoryCloudConflictRetryTasks
+            .removeValue(forKey: repositoryID)?
+            .cancel()
+        repositoryCloudConflictRetryTasks[repositoryID] =
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                do {
+                    try await self.sleepUntilSharedCloudRetry(
+                        retryAt
+                    )
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else {
+                    return
+                }
+                self.repositoryCloudConflictRetryTasks.removeValue(
+                    forKey: repositoryID
+                )
+                guard !self.arePendingCloudUploadsQuarantined,
+                      self.activeSharedCloudThrottleUntil() == nil,
+                      self.repositoryReference(for: repositoryID)?
+                        .pendingCloudUploadGeneration != nil,
+                      self.repositoryReference(for: repositoryID)?
+                        .cloudUploadConflictDetectedAt == nil else {
+                    return
+                }
+                self.scheduleCloudSync(
+                    repositoryID: repositoryID,
+                    descriptor: descriptor,
+                    displayName: displayName,
+                    mutationCount: 0
+                )
+            }
+    }
+
     private func uploadPendingCloudSync(
         _ pendingSync: PendingRepositoryCloudSync,
         repositoryID: String
@@ -2423,6 +3191,9 @@ final class AppStore {
         let outboxStore = cloudUploadOutboxStore(for: repositoryID)
 
         do {
+            guard !arePendingCloudUploadsQuarantined else {
+                return
+            }
             guard activeSharedCloudThrottleUntil() == nil else {
                 return
             }
@@ -2459,8 +3230,10 @@ final class AppStore {
             let savedDescriptor = saveResult.descriptor
 
             var latestOutbox = try outboxStore.load()
+            var didUploadLatestGeneration = false
             var shouldRemoveUploadedOutbox = false
             if latestOutbox?.generation == outbox.generation {
+                didUploadLatestGeneration = true
                 latestOutbox?.markUploaded(
                     descriptor: savedDescriptor,
                     serverModifiedAt: saveResult.serverModifiedAt,
@@ -2498,8 +3271,9 @@ final class AppStore {
                         )
                     )
                 }
-                latestOutbox.advanceBaseRecordChangeTag(
+                try latestOutbox.advanceBaseRecordChangeTag(
                     saveResult.recordChangeTag,
+                    baseSnapshot: outbox.snapshot,
                     retainingPredecessorOperationIDs:
                         carriesEncryptedResetAcknowledgement
                             ? [outbox.operationID]
@@ -2510,6 +3284,9 @@ final class AppStore {
                 try outboxStore.save(latestOutbox)
             }
 
+            if didUploadLatestGeneration {
+                try repositoryStore.saveCloudSnapshot(outbox.snapshot)
+            }
             try repositoryStore.saveDescriptor(savedDescriptor)
 
             if currentRepositoryID == repositoryID {
@@ -2541,21 +3318,73 @@ final class AppStore {
             SyncDiagnostics.logger.info(
                 "CloudKit repository upload completed and its durable receipt was committed."
             )
+            repositoryCloudConflictRetryTasks
+                .removeValue(forKey: repositoryID)?
+                .cancel()
+            repositoryCloudConflictRecoveryAttempts[repositoryID] = 0
             await ensureRepositorySubscriptions()
         } catch CloudRepositoryError.repositoryConflict(let serverRecordChangeTag) {
-            SyncDiagnostics.logger.error(
-                "CloudKit repository upload paused because the server baseline changed."
-            )
-            markCloudUploadConflict(
-                for: repositoryID,
-                serverRecordChangeTag: serverRecordChangeTag
-            )
-            try? persistRepositoryCatalog()
-            alertMessage = Self.userFacingMessage(
-                for: CloudRepositoryError.repositoryConflict(
-                    serverRecordChangeTag: serverRecordChangeTag
+            let recoveryAttempt =
+                (repositoryCloudConflictRecoveryAttempts[repositoryID] ?? 0)
+                + 1
+            repositoryCloudConflictRecoveryAttempts[repositoryID] =
+                recoveryAttempt
+            guard recoveryAttempt <=
+                    Self.maximumImmediateCloudConflictRecoveryAttempts else {
+                SyncDiagnostics.logger.notice(
+                    "Deferred CloudKit conflict recovery after reaching the bounded immediate retry limit."
                 )
-            )
+                scheduleDeferredCloudConflictRetry(
+                    repositoryID: repositoryID,
+                    descriptor: pendingSync.descriptor,
+                    displayName: pendingSync.displayName
+                )
+                return
+            }
+
+            do {
+                let outcome = try await recoverPendingCloudUploadConflict(
+                    repositoryID: repositoryID,
+                    displayName: pendingSync.displayName
+                )
+                switch outcome {
+                case .completed:
+                    repositoryCloudConflictRecoveryAttempts[repositoryID] = 0
+                    SyncDiagnostics.logger.info(
+                        "Recovered an uncertain CloudKit upload from its server operation identifier."
+                    )
+                    await ensureRepositorySubscriptions()
+                case .retry:
+                    scheduleCloudSync(
+                        repositoryID: repositoryID,
+                        descriptor: pendingSync.descriptor,
+                        displayName: pendingSync.displayName,
+                        mutationCount: 0
+                    )
+                case .unresolved(let generation):
+                    SyncDiagnostics.logger.error(
+                        "CloudKit conflict could not be safely rebased; preserved the durable local outbox."
+                    )
+                    markCloudUploadConflict(
+                        for: repositoryID,
+                        expectedGeneration: generation,
+                        serverRecordChangeTag:
+                            serverRecordChangeTag
+                    )
+                    try? persistRepositoryCatalog()
+                    alertMessage = Self.userFacingMessage(
+                        for: CloudRepositoryError.repositoryConflict(
+                            serverRecordChangeTag:
+                                serverRecordChangeTag
+                        )
+                    )
+                }
+            } catch {
+                SyncDiagnostics.logger.error(
+                    "CloudKit conflict revalidation failed; preserved the durable outbox for a later retry: \(String(describing: error), privacy: .public)"
+                )
+                _ = recordSharedCloudThrottleIfNeeded(for: error)
+            }
         } catch {
             SyncDiagnostics.logger.error(
                 "CloudKit repository upload failed and remains in the durable outbox: \(String(describing: error), privacy: .public)"
@@ -2564,7 +3393,202 @@ final class AppStore {
         }
     }
 
+    private func recoverPendingCloudUploadConflict(
+        repositoryID: String,
+        displayName: String
+    ) async throws -> CloudConflictRecoveryOutcome {
+        let repositoryStore =
+            libraryStore.repositoryStore(for: repositoryID)
+        let outboxStore =
+            cloudUploadOutboxStore(for: repositoryID)
+        guard let outbox = try outboxStore.load(),
+              outbox.receipt == nil else {
+            return .completed
+        }
+
+        // Share creation and encrypted-data-reset recovery have different
+        // identity/acknowledgement semantics. Never fold them into an ordinary
+        // repository merge.
+        guard outbox.mode == .normal else {
+            return .unresolved(generation: outbox.generation)
+        }
+
+        let loadedRemote =
+            try await cloudService.loadSnapshotWithMetadata(
+                using: outbox.descriptor,
+                availableImageContentHashes: [:]
+            )
+        try Task.checkCancellation()
+        guard let remoteRecordChangeTag =
+                loadedRemote.metadata.recordChangeTag else {
+            throw CloudRepositoryError.invalidRepositoryData
+        }
+
+        // A local edit may have created a successor while the server read was
+        // in flight. Never let recovery for G overwrite durable generation G+1.
+        guard let latestOutbox = try outboxStore.load(),
+              latestOutbox.generation == outbox.generation,
+              latestOutbox.operationID == outbox.operationID else {
+            return .retry
+        }
+
+        let remoteOperationID =
+            loadedRemote.snapshot.cloudUploadOperationID
+        if remoteOperationID == outbox.operationID {
+            try commitRecoveredCloudUpload(
+                outbox,
+                metadata: loadedRemote.metadata,
+                repositoryIndex: repositories.firstIndex {
+                    $0.id == repositoryID
+                },
+                outboxStore: outboxStore
+            )
+            return .completed
+        }
+
+        if let remoteOperationID,
+           outbox.predecessorOperationIDs.contains(
+                remoteOperationID
+           ) {
+            var rebasedOutbox = latestOutbox
+            try rebasedOutbox.advanceBaseRecordChangeTag(
+                remoteRecordChangeTag,
+                baseSnapshot: loadedRemote.snapshot
+            )
+            try outboxStore.save(rebasedOutbox)
+            markCloudUploadPending(
+                for: repositoryID,
+                snapshotUpdatedAt:
+                    rebasedOutbox.snapshot.updatedAt,
+                generation: rebasedOutbox.generation,
+                baseRecordChangeTag: remoteRecordChangeTag
+            )
+            clearCloudUploadConflict(for: repositoryID)
+            updateRemoteMetadata(
+                for: repositoryID,
+                metadata: loadedRemote.metadata
+            )
+            try persistRepositoryCatalog()
+            return .retry
+        }
+
+        let resolution = RepositorySnapshotConflictResolver.merge(
+            base: outbox.baseSnapshot,
+            local: outbox.snapshot,
+            remote: loadedRemote.snapshot,
+            mergedAt: now()
+        )
+        let successorOutbox = try CloudUploadOutboxRecord(
+            repositoryID: repositoryID,
+            descriptor: outbox.descriptor,
+            displayName: displayName,
+            snapshot: resolution.snapshot,
+            generation: outbox.generation &+ 1,
+            baseRecordChangeTag: remoteRecordChangeTag,
+            baseSnapshot: loadedRemote.snapshot,
+            predecessorOperationIDs:
+                outbox.successorPredecessorOperationIDs,
+            mode: .normal,
+            encryptedResetAcknowledgement:
+                outbox.encryptedResetAcknowledgement,
+            createdAt: now()
+        )
+
+        // Recheck after all async work and before replacing the durable outbox.
+        guard let confirmedOutbox = try outboxStore.load(),
+              confirmedOutbox.generation == outbox.generation,
+              confirmedOutbox.operationID == outbox.operationID else {
+            return .retry
+        }
+
+        // The merged successor becomes durable before it is installed as the
+        // visible local snapshot. A crash at either boundary is recoverable.
+        try outboxStore.save(successorOutbox)
+        try repositoryStore.saveCloudSnapshot(
+            successorOutbox.snapshot
+        )
+        try repositoryStore.saveDescriptor(
+            successorOutbox.descriptor
+        )
+
+        upsertRepositoryReference(
+            repositoryID: repositoryID,
+            descriptor: successorOutbox.descriptor,
+            displayName: displayName,
+            snapshotUpdatedAt:
+                successorOutbox.snapshot.updatedAt,
+            markAsOpened: repositoryID == currentRepositoryID
+        )
+        markCloudUploadPending(
+            for: repositoryID,
+            snapshotUpdatedAt:
+                successorOutbox.snapshot.updatedAt,
+            generation: successorOutbox.generation,
+            baseRecordChangeTag: remoteRecordChangeTag
+        )
+        clearCloudUploadConflict(for: repositoryID)
+        updateRemoteMetadata(
+            for: repositoryID,
+            metadata: loadedRemote.metadata
+        )
+        try persistRepositoryCatalog()
+
+        if repositoryID == currentRepositoryID {
+            repositoryDescriptor = successorOutbox.descriptor
+            applySnapshot(
+                successorOutbox.snapshot.removingEmbeddedImages()
+            )
+            invalidateImageViews()
+        }
+
+        if resolution.conflictingEntryCopyCount > 0 {
+            alertMessage = L10n.string(
+                "iCloud and local changes were merged. Conflicting edits were kept as separate entries."
+            )
+        }
+        SyncDiagnostics.logger.notice(
+            "Rebased a durable CloudKit outbox onto the latest server snapshot; preserved \(resolution.conflictingEntryCopyCount, privacy: .public) same-entry conflict copies."
+        )
+        return .retry
+    }
+
+    private func commitRecoveredCloudUpload(
+        _ outbox: CloudUploadOutboxRecord,
+        metadata: RepositorySnapshotMetadata,
+        repositoryIndex: Int?,
+        outboxStore: CloudUploadOutboxStore
+    ) throws {
+        guard let repositoryIndex else {
+            throw CloudRepositoryError.repositoryNotFound
+        }
+        var uploadedOutbox = outbox
+        uploadedOutbox.markUploaded(
+            descriptor: outbox.descriptor,
+            serverModifiedAt: metadata.serverModifiedAt,
+            recordChangeTag: metadata.recordChangeTag,
+            uploadedAt: now()
+        )
+        try outboxStore.save(uploadedOutbox)
+        guard let receipt = uploadedOutbox.receipt else {
+            throw CloudRepositoryError.invalidRepositoryData
+        }
+        try stageCloudUploadReceiptCommit(
+            uploadedOutbox,
+            receipt: receipt,
+            repositoryIndex: repositoryIndex
+        )
+        try persistRepositoryCatalog()
+        if uploadedOutbox.mode !=
+                .recreateAfterEncryptedDataReset,
+           uploadedOutbox.encryptedResetAcknowledgement == nil {
+            try outboxStore.remove()
+        }
+    }
+
     private func resumePendingCloudSyncs(waitForCompletion: Bool = true) async {
+        guard !arePendingCloudUploadsQuarantined else {
+            return
+        }
         let pendingReferences = repositories.filter {
             ($0.pendingCloudUploadAt != nil || $0.pendingCloudUploadGeneration != nil) &&
                 ($0.descriptor.isCloudBacked ||
@@ -2639,15 +3663,30 @@ final class AppStore {
 
     private func markCloudUploadConflict(
         for repositoryID: String,
+        expectedGeneration: Int,
         serverRecordChangeTag: String?
     ) {
         guard let index = repositories.firstIndex(where: { $0.id == repositoryID }) else {
+            return
+        }
+        guard repositories[index].pendingCloudUploadGeneration ==
+                expectedGeneration else {
             return
         }
 
         repositories[index].cloudUploadConflictServerChangeTag =
             serverRecordChangeTag
         repositories[index].cloudUploadConflictDetectedAt = now()
+    }
+
+    private func clearCloudUploadConflict(for repositoryID: String) {
+        guard let index = repositories.firstIndex(where: {
+            $0.id == repositoryID
+        }) else {
+            return
+        }
+        repositories[index].cloudUploadConflictServerChangeTag = nil
+        repositories[index].cloudUploadConflictDetectedAt = nil
     }
 
     private func finishRepositoryMutations(for repositoryID: String, count: Int) async {
@@ -2824,13 +3863,24 @@ final class AppStore {
 
     private func handleRepositoryZoneDeletion(
         _ deletion: CloudRepositoryZoneDeletion,
-        databaseScope: CloudDatabaseScope?
+        databaseScope: CloudDatabaseScope?,
+        accountEpoch: Int
     ) async throws -> (checkedCount: Int, updatedCount: Int) {
+        guard isCloudAccountOperationCurrent(accountEpoch),
+              !Task.isCancelled else {
+            throw CancellationError()
+        }
         switch deletion.reason {
         case .deleted:
-            return try await markRepositoryZonesUnavailable([deletion.zoneID])
+            return try await markRepositoryZonesUnavailable(
+                [deletion.zoneID],
+                accountEpoch: accountEpoch
+            )
         case .purged:
-            return try await purgeRepositoryZone(deletion.zoneID)
+            return try await purgeRepositoryZone(
+                deletion.zoneID,
+                accountEpoch: accountEpoch
+            )
         case .encryptedDataReset:
             let ownerReferences = repositories.filter {
                 $0.descriptor.role == .owner &&
@@ -2838,12 +3888,18 @@ final class AppStore {
             }
             guard databaseScope == .privateDatabase,
                   !ownerReferences.isEmpty else {
-                return try await markRepositoryZonesUnavailable([deletion.zoneID])
+                return try await markRepositoryZonesUnavailable(
+                    [deletion.zoneID],
+                    accountEpoch: accountEpoch
+                )
             }
 
             var updatedCount = 0
             for reference in ownerReferences {
-                try await recreateRepositoryAfterEncryptedDataReset(reference)
+                try await recreateRepositoryAfterEncryptedDataReset(
+                    reference,
+                    accountEpoch: accountEpoch
+                )
                 updatedCount += 1
             }
             return (ownerReferences.count, updatedCount)
@@ -2973,10 +4029,46 @@ final class AppStore {
 
     private func reconcileAttemptedEncryptedResetAcknowledgements()
         async {
-        guard activeSharedCloudThrottleUntil() == nil else {
+        guard !arePendingCloudUploadsQuarantined,
+              activeSharedCloudThrottleUntil() == nil else {
+            return
+        }
+        if let existingTask =
+                encryptedResetReconciliationTask {
+            await existingTask.value
             return
         }
 
+        let taskID = UUID()
+        let accountEpoch = cloudAccountTransitionSequence
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            await self.performEncryptedResetReconciliation(
+                accountEpoch: accountEpoch
+            )
+        }
+        encryptedResetReconciliationTask = task
+        encryptedResetReconciliationTaskID = taskID
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if encryptedResetReconciliationTaskID == taskID {
+            encryptedResetReconciliationTask = nil
+            encryptedResetReconciliationTaskID = nil
+        }
+    }
+
+    private func performEncryptedResetReconciliation(
+        accountEpoch: Int
+    ) async {
+        guard isCloudAccountOperationCurrent(accountEpoch),
+              !Task.isCancelled else {
+            return
+        }
         do {
             let attemptedZoneIDs =
                 try encryptedResetAcknowledgementAttemptedZoneIDs()
@@ -2987,11 +4079,31 @@ final class AppStore {
                 try await cloudService.pendingRepositoryZoneChanges(
                     in: .privateDatabase
                 )
+            guard isCloudAccountOperationCurrent(accountEpoch),
+                  !Task.isCancelled else {
+                return
+            }
             try completeAttemptedEncryptedResetAcknowledgements(
                 notPendingIn: changes.deletedZones
             )
         } catch {
+            guard isCloudAccountOperationCurrent(accountEpoch) else {
+                return
+            }
             _ = recordSharedCloudThrottleIfNeeded(for: error)
+        }
+    }
+
+    private func quiesceEncryptedResetReconciliation() async {
+        guard let task = encryptedResetReconciliationTask else {
+            return
+        }
+        let taskID = encryptedResetReconciliationTaskID
+        task.cancel()
+        await task.value
+        if encryptedResetReconciliationTaskID == taskID {
+            encryptedResetReconciliationTask = nil
+            encryptedResetReconciliationTaskID = nil
         }
     }
 
@@ -3032,28 +4144,43 @@ final class AppStore {
     }
 
     private func markRepositoryZonesUnavailable(
-        _ zoneIDs: Set<CloudRepositoryZoneIdentity>
+        _ zoneIDs: Set<CloudRepositoryZoneIdentity>,
+        accountEpoch: Int
     ) async throws -> (checkedCount: Int, updatedCount: Int) {
-        var checkedCount = 0
+        let affectedRepositoryIDs = repositories.compactMap {
+            reference -> String? in
+            guard let zoneID = cloudZoneIdentity(for: reference),
+                  zoneIDs.contains(zoneID) else {
+                return nil
+            }
+            return reference.id
+        }
+        for repositoryID in affectedRepositoryIDs {
+            await quiesceRepositoryCloudSync(for: repositoryID)
+        }
+        guard isCloudAccountOperationCurrent(accountEpoch),
+              !Task.isCancelled else {
+            throw CancellationError()
+        }
+
+        let affectedRepositoryIDSet = Set(affectedRepositoryIDs)
         var updatedCount = 0
         var didChangeCatalog = false
         var didAffectCurrentRepository = false
-        var affectedRepositoryIDs: [String] = []
 
         for index in repositories.indices {
-            guard let zoneID = cloudZoneIdentity(for: repositories[index]),
-                  zoneIDs.contains(zoneID) else {
+            guard affectedRepositoryIDSet.contains(
+                repositories[index].id
+            ) else {
                 continue
             }
 
-            checkedCount += 1
             let repositoryID = repositories[index].id
             if repositories[index].cloudZoneUnavailableAt == nil {
                 repositories[index].cloudZoneUnavailableAt = now()
                 updatedCount += 1
                 didChangeCatalog = true
             }
-            affectedRepositoryIDs.append(repositoryID)
             if repositoryID == currentRepositoryID {
                 didAffectCurrentRepository = true
             }
@@ -3064,18 +4191,18 @@ final class AppStore {
         }
         for repositoryID in affectedRepositoryIDs {
             repositoriesPendingRefreshAfterMutation.remove(repositoryID)
-            await quiesceRepositoryCloudSync(for: repositoryID)
         }
         if didAffectCurrentRepository {
             alertMessage = L10n.string(
                 "The shared repository is no longer available in iCloud. Its cached content is kept read-only on this device."
             )
         }
-        return (checkedCount, updatedCount)
+        return (affectedRepositoryIDs.count, updatedCount)
     }
 
     private func purgeRepositoryZone(
-        _ zoneID: CloudRepositoryZoneIdentity
+        _ zoneID: CloudRepositoryZoneIdentity,
+        accountEpoch: Int
     ) async throws -> (checkedCount: Int, updatedCount: Int) {
         let matchingReferences = repositories.filter {
             cloudZoneIdentity(for: $0) == zoneID
@@ -3085,16 +4212,6 @@ final class AppStore {
         }
 
         let affectedRepositoryIDs = Set(matchingReferences.map(\.id))
-        let purgeRequestedAt = now()
-        for index in repositories.indices
-        where affectedRepositoryIDs.contains(repositories[index].id) {
-            repositories[index].cloudPurgeRequestedAt =
-                repositories[index].cloudPurgeRequestedAt ?? purgeRequestedAt
-        }
-        // Persist the upload-blocking tombstone before deleting any recoverable
-        // state. Startup reconciliation completes this cleanup idempotently.
-        try persistRepositoryCatalog()
-
         let tasksToCancel = affectedRepositoryIDs.compactMap {
             repositoryCloudSyncTasks[$0]
         }
@@ -3104,6 +4221,10 @@ final class AppStore {
         for task in tasksToCancel {
             await task.value
         }
+        guard isCloudAccountOperationCurrent(accountEpoch),
+              !Task.isCancelled else {
+            throw CancellationError()
+        }
 
         for repositoryID in affectedRepositoryIDs {
             pendingRepositoryCloudSyncs.removeValue(forKey: repositoryID)
@@ -3112,6 +4233,15 @@ final class AppStore {
             repositoryMutationInFlightCounts.removeValue(forKey: repositoryID)
         }
 
+        let purgeRequestedAt = now()
+        for index in repositories.indices
+        where affectedRepositoryIDs.contains(repositories[index].id) {
+            repositories[index].cloudPurgeRequestedAt =
+                repositories[index].cloudPurgeRequestedAt ?? purgeRequestedAt
+        }
+        // Persist the upload-blocking tombstone before deleting any recoverable
+        // state. Startup reconciliation completes this cleanup idempotently.
+        try persistRepositoryCatalog()
         try completePurgedRepositoryCleanup(
             repositoryIDs: affectedRepositoryIDs
         )
@@ -3170,12 +4300,17 @@ final class AppStore {
     }
 
     private func recreateRepositoryAfterEncryptedDataReset(
-        _ reference: RepositoryReference
+        _ reference: RepositoryReference,
+        accountEpoch: Int
     ) async throws {
         let outboxStore = cloudUploadOutboxStore(for: reference.id)
 
         repositoriesPendingRefreshAfterMutation.remove(reference.id)
         await quiesceRepositoryCloudSync(for: reference.id)
+        guard isCloudAccountOperationCurrent(accountEpoch),
+              !Task.isCancelled else {
+            throw CancellationError()
+        }
 
         let repositoryStore = libraryStore.repositoryStore(for: reference.id)
         let existingOutbox = try outboxStore.load()
@@ -3243,6 +4378,10 @@ final class AppStore {
         )
         if let task = repositoryCloudSyncTasks[reference.id] {
             await task.value
+        }
+        guard isCloudAccountOperationCurrent(accountEpoch),
+              !Task.isCancelled else {
+            throw CancellationError()
         }
 
         if let remainingOutbox = try outboxStore.load() {
@@ -3371,7 +4510,9 @@ final class AppStore {
     }
 
     private func ensureRepositorySubscriptions() async {
-        guard activeSharedCloudThrottleUntil() == nil else {
+        let accountEpoch = cloudAccountTransitionSequence
+        guard !arePendingCloudUploadsQuarantined,
+              activeSharedCloudThrottleUntil() == nil else {
             return
         }
 
@@ -3406,11 +4547,19 @@ final class AppStore {
         for (scope, references) in validationGroups
         where !references.isEmpty &&
             !subscriptionValidationAttemptedScopes.contains(scope) {
+            guard isCloudAccountOperationCurrent(accountEpoch),
+                  !Task.isCancelled else {
+                return
+            }
             subscriptionValidationAttemptedScopes.insert(scope)
             do {
                 try await cloudService.ensureRepositorySubscriptions(
                     using: references.map(\.descriptor)
                 )
+                guard isCloudAccountOperationCurrent(accountEpoch),
+                      !Task.isCancelled else {
+                    return
+                }
                 let validatedRepositoryIDs = Set(references.map(\.id))
                 for index in repositories.indices
                 where validatedRepositoryIDs.contains(repositories[index].id) {
@@ -3427,6 +4576,9 @@ final class AppStore {
                 subscriptionValidationAttemptedScopes.remove(scope)
                 didUpdateCatalog = true
             } catch {
+                guard isCloudAccountOperationCurrent(accountEpoch) else {
+                    return
+                }
                 let scopeName = scope == .privateDatabase
                     ? "private"
                     : "shared"
@@ -3440,7 +4592,8 @@ final class AppStore {
             }
         }
 
-        if didUpdateCatalog {
+        if didUpdateCatalog,
+           isCloudAccountOperationCurrent(accountEpoch) {
             try? persistRepositoryCatalog()
         }
     }
@@ -3489,9 +4642,17 @@ final class AppStore {
     @discardableResult
     private func refreshRepository(
         _ reference: RepositoryReference,
-        trigger: SharedRepositoryRefreshTrigger
+        trigger: SharedRepositoryRefreshTrigger,
+        accountEpoch: Int? = nil
     ) async throws -> RepositoryRefreshOutcome {
+        let expectedAccountEpoch =
+            accountEpoch ?? cloudAccountTransitionSequence
         try Task.checkCancellation()
+        guard isCloudAccountOperationCurrent(
+            expectedAccountEpoch
+        ) else {
+            return .deferred
+        }
         let repositoryStore = libraryStore.repositoryStore(for: reference.id)
         let mutationGenerationBeforeLoad = repositoryMutationGeneration(for: reference.id)
         let previousSnapshot = try repositoryStore.loadSnapshot()
@@ -3503,6 +4664,11 @@ final class AppStore {
 
         let metadata = try await cloudService.loadSnapshotMetadata(using: reference.descriptor)
         try Task.checkCancellation()
+        guard isCloudAccountOperationCurrent(
+            expectedAccountEpoch
+        ) else {
+            return .deferred
+        }
         if let previousSnapshot {
             if let remoteChangeTag = metadata.recordChangeTag {
                 if reference.lastKnownServerRecordChangeTag == remoteChangeTag {
@@ -3525,6 +4691,11 @@ final class AppStore {
                 locallyAvailableImageContentHashes
         )
         try Task.checkCancellation()
+        guard isCloudAccountOperationCurrent(
+            expectedAccountEpoch
+        ) else {
+            return .deferred
+        }
         let normalizedRemoteSnapshot = remoteSnapshot.removingEmbeddedImages()
         let latestLocalSnapshot = try repositoryStore.loadSnapshot()
 
@@ -3548,6 +4719,11 @@ final class AppStore {
         let didChangeLocalSnapshot = previousSnapshot != normalizedRemoteSnapshot
         let shouldNotify = previousSnapshot != nil && didChangeLocalSnapshot
 
+        guard isCloudAccountOperationCurrent(
+            expectedAccountEpoch
+        ) else {
+            return .deferred
+        }
         try repositoryStore.saveDescriptor(reference.descriptor)
         try repositoryStore.saveCloudSnapshot(remoteSnapshot)
 

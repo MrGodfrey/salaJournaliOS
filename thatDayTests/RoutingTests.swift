@@ -51,7 +51,7 @@ final class RoutingTests: AppStoreTestCase {
     }
 
     @MainActor
-    func testHandleNotificationRouteSwitchesRepositoryAndRoutesToSharedEntry() async throws {
+    func testColdLaunchNotificationRouteLoadsCatalogThenRoutesToSharedEntry() async throws {
         let storageRoot = makeTempDirectory()
         let libraryStore = RepositoryLibraryStore(rootURL: storageRoot)
         let sharedDescriptor = RepositoryDescriptor(
@@ -102,8 +102,6 @@ final class RoutingTests: AppStoreTestCase {
             cloudService: cloudService,
             now: { self.fixtureDate("2026-04-16T09:00:00Z") }
         )
-        await store.loadIfNeeded()
-
         await store.handleNotificationRoute(
             NotificationEntryRoute(
                 repositoryID: sharedDescriptor.storageIdentifier,
